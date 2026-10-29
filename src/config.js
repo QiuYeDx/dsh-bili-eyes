@@ -8,7 +8,7 @@ export const DATA_DIR = path.join(DSH_HOME, 'bili-eyes');
 export const CONFIG_FILE = path.join(DSH_HOME, 'bili-eyes.json');
 
 export const DEFAULTS = Object.freeze({
-  maxPerHour: 12,          // 每小时最多新看几个视频（缓存命中不算）
+  maxPerHour: 30,          // 每小时最多新看几个视频（缓存命中不算；放大看另算，上限是它的 2 倍）
   maxFullSeconds: 7200,    // 这个时长以内看完整；更长且没给 from/to：只看开头 longWindowSeconds
   longWindowSeconds: 7200,
   secondsPerCell: 60,      // 每格大约覆盖多久；视频越长分镜图越多（每张 16 格），直到 maxSheets

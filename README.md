@@ -58,7 +58,7 @@ node bin/cli.mjs status
 
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
-| `maxPerHour` | 12 | 每小时最多新看几个视频（缓存命中不算） |
+| `maxPerHour` | 30 | 每小时最多新看几个视频（缓存命中不算；放大看上限是它的 2 倍） |
 | `maxFullSeconds` / `longWindowSeconds` | 7200 / 7200 | 这个时长以内看完整；更长的只看开头 `longWindowSeconds` |
 | `secondsPerCell` / `maxSheets` | 60 / 4 | 每格大约覆盖多久；视频越长分镜图越多（每张 16 格），最多几张。30 分钟 = 2 张，1 小时 = 4 张 |
 | `timeoutSeconds` | 150 | 分镜的最短超时；长视频按时长自动放宽（最多 10 分钟）。超时就只返回文字信息 |
