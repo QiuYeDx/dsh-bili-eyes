@@ -1,5 +1,6 @@
-// B站公开接口（只读）：视频信息、标签、热评、弹幕、字幕、AI 总结、登录状态。
-// 不实现任何写操作（评论、点赞、投币、弹幕、私信）。
+// B站接口：视频信息、标签、评论、弹幕、字幕、AI 总结、登录状态、推荐与动态、收件箱，
+// 以及少数写操作（点赞、收藏、评论、删评论、私信、纯文字动态）。
+// 写操作只在这里发请求；要不要发、发给谁、发几条由 act.js 决定。不实现投币、关注、拉黑、改资料、上传。
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 
@@ -51,6 +52,58 @@ export function parseSearchItem(r) {
   };
 }
 
+/** 推荐 / 热门 / 排行里的一条稿件 → 和搜索结果同样的字段 */
+export function parseArchive(a) {
+  return {
+    bvid: a.bvid,
+    title: stripHtml(a.title),
+    author: a.owner?.name ?? '',
+    mid: Number(a.owner?.mid) || 0,
+    seconds: Number(a.duration) || 0,
+    play: Number(a.stat?.view) || 0,
+    danmaku: Number(a.stat?.danmaku) || 0,
+    pubdate: Number(a.pubdate) || 0,
+    desc: stripHtml(a.desc).replace(/\s+/g, ' '),
+  };
+}
+// 动态里的数字可能写成「1.2万」
+const dynNum = (v) => {
+  const t = String(v ?? '').replace(/,/g, '');
+  const n = parseFloat(t);
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(t.includes('亿') ? n * 1e8 : t.includes('万') ? n * 1e4 : n);
+};
+/** 动态里的投稿视频（关注动态、UP 主动态）→ 同样的字段；不是视频的返回 null */
+export function parseDynArchive(item) {
+  const a = item?.modules?.module_dynamic?.major?.archive;
+  if (!a?.bvid) return null;
+  const au = item.modules.module_author ?? {};
+  return {
+    bvid: a.bvid,
+    title: stripHtml(a.title),
+    author: au.name ?? '',
+    mid: Number(au.mid) || 0,
+    seconds: parseClock(a.duration_text),
+    play: dynNum(a.stat?.play),
+    danmaku: dynNum(a.stat?.danmaku),
+    pubdate: Number(au.pub_ts) || 0,
+    desc: stripHtml(a.desc).replace(/\s+/g, ' '),
+  };
+}
+/** 一条评论 → 精简字段（rpid 回复时要用） */
+export function parseComment(r) {
+  return {
+    rpid: String(r.rpid_str ?? r.rpid),
+    root: String(r.root_str ?? r.root ?? 0),
+    user: r.member?.uname ?? '',
+    mid: Number(r.mid ?? r.member?.mid) || 0,
+    likes: Number(r.like) || 0,
+    replies: Number(r.rcount) || 0,
+    at: (Number(r.ctime) || 0) * 1000,
+    text: String(r.content?.message ?? '').replace(/\s+/g, ' ').trim(),
+  };
+}
+
 export class BiliClient {
   /** @param {{cookies?: Record<string,string>, minIntervalMs?: number, fetchImpl?: typeof fetch}} opts */
   constructor({ cookies = {}, minIntervalMs = 350, fetchImpl = fetch } = {}) {
@@ -68,17 +121,19 @@ export class BiliClient {
   }
 
   // 串行 + 最小间隔：B站对匿名请求限流很紧（412）
-  async request(url, { raw = false } = {}) {
+  async request(url, { raw = false, method = 'GET', form = null, json = null } = {}) {
     const run = async () => {
       const wait = this.lastAt + this.minIntervalMs - Date.now();
       if (wait > 0) await new Promise((r) => setTimeout(r, wait));
       this.lastAt = Date.now();
+      const headers = { 'user-agent': UA, referer: 'https://www.bilibili.com/', cookie: this.cookieHeader() };
+      if (method !== 'GET') headers.origin = 'https://www.bilibili.com';
+      let body;
+      if (form) { headers['content-type'] = 'application/x-www-form-urlencoded'; body = new URLSearchParams(form).toString(); }
+      else if (json) { headers['content-type'] = 'application/json'; body = JSON.stringify(json); }
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const r = await this.fetchImpl(url, {
-          headers: { 'user-agent': UA, referer: 'https://www.bilibili.com/', cookie: this.cookieHeader() },
-          signal: AbortSignal.timeout(12_000),
-        });
-        if (r.status === 412 && attempt === 0) { await new Promise((res) => setTimeout(res, 2500)); continue; }
+        const r = await this.fetchImpl(url, { method, headers, body, signal: AbortSignal.timeout(12_000) });
+        if (r.status === 412 && attempt === 0 && method === 'GET') { await new Promise((res) => setTimeout(res, 2500)); continue; }
         if (!r.ok) throw new BiliError(`B站接口 HTTP ${r.status}`, r.status);
         if (raw) return Buffer.from(await r.arrayBuffer());
         const j = await r.json();
@@ -191,5 +246,149 @@ export class BiliClient {
       summary: m.summary,
       outline: (m.outline ?? []).map((o) => ({ title: o.title, at: o.timestamp })),
     };
+  }
+
+  // ── 列表：推荐、热门、排行、关注动态、UP 主投稿 ─────────────────────────────
+  /** 首页推荐：登录后按这个账号的口味推荐。 */
+  async recommend(n = 12) {
+    await this.ensureBuvid();
+    const d = await this.signed('https://api.bilibili.com/x/web-interface/wbi/index/top/feed/rcmd', { fresh_type: 4, ps: Math.min(30, Math.max(n, 6)), fresh_idx: 1, fresh_idx_1h: 1, brush: 1 });
+    return (d?.item ?? []).filter((x) => x.goto === 'av' && x.bvid).map(parseArchive);
+  }
+
+  async popular(n = 20) {
+    const d = await this.request(`https://api.bilibili.com/x/web-interface/popular?ps=${Math.min(50, Math.max(n, 1))}&pn=1`);
+    return (d?.list ?? []).map(parseArchive);
+  }
+
+  /** 全站排行（rid=0）；新接口要 WBI 签名，旧的不签也能用，先签。 */
+  async ranking() {
+    let d;
+    try { d = await this.signed('https://api.bilibili.com/x/web-interface/ranking/v2', { rid: 0, type: 'all' }); }
+    catch { d = await this.request('https://api.bilibili.com/x/web-interface/ranking/v2?rid=0&type=all'); }
+    return (d?.list ?? []).map(parseArchive);
+  }
+
+  /** 关注的 UP 主最近发的视频（要登录）。 */
+  async followingVideos() {
+    const d = await this.request('https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/all?type=video&page=1');
+    return (d?.items ?? []).map(parseDynArchive).filter(Boolean);
+  }
+
+  /** 某个 UP 主最近的投稿：空间投稿接口风控很重，用动态接口代替（只取视频）。 */
+  async upVideos(mid) {
+    const d = await this.request(`https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space?host_mid=${Number(mid)}&features=itemOpusStyle`);
+    return (d?.items ?? []).map(parseDynArchive).filter(Boolean);
+  }
+
+  /** 按昵称找 UP 主：同名优先，否则取搜索第一个。返回 {mid, name, fans} 或 null。 */
+  async findUser(name) {
+    await this.ensureBuvid();
+    const d = await this.signed('https://api.bilibili.com/x/web-interface/wbi/search/type', { search_type: 'bili_user', keyword: name });
+    const list = (d?.result ?? []).map((u) => ({ mid: Number(u.mid), name: stripHtml(u.uname), fans: Number(u.fans) || 0 }));
+    return list.find((u) => u.name === name) ?? list[0] ?? null;
+  }
+
+  /** 用户名片：{mid, name}。 */
+  async card(mid) {
+    const d = await this.request(`https://api.bilibili.com/x/web-interface/card?mid=${Number(mid)}`);
+    return { mid: Number(mid), name: d?.card?.name ?? '' };
+  }
+
+  // ── 评论 ──────────────────────────────────────────────────────────────
+  /** 评论区：sort hot 按热度 / new 按时间。type 1 = 视频。 */
+  async comments(oid, { sort = 'hot', n = 10, type = 1 } = {}) {
+    const d = await this.request(`https://api.bilibili.com/x/v2/reply/main?type=${type}&oid=${oid}&mode=${sort === 'new' ? 2 : 3}&ps=${Math.min(20, Math.max(n, 1))}`);
+    return {
+      pinned: (d?.top_replies ?? []).map(parseComment),
+      list: (d?.replies ?? []).slice(0, n).map(parseComment),
+      total: d?.cursor?.all_count ?? null,
+      upMid: Number(d?.upper?.mid) || 0,
+    };
+  }
+
+  /** 某条评论下面的楼中楼。 */
+  async commentReplies(oid, root, { n = 10, type = 1 } = {}) {
+    const d = await this.request(`https://api.bilibili.com/x/v2/reply/reply?type=${type}&oid=${oid}&root=${root}&ps=${Math.min(20, Math.max(n, 1))}&pn=1`);
+    return { root: d?.root ? parseComment(d.root) : null, list: (d?.replies ?? []).map(parseComment), total: d?.page?.count ?? null };
+  }
+
+  // ── 收件箱 ────────────────────────────────────────────────────────────
+  /** 回复我的（最新在前）。 */
+  replyFeed() { return this.request('https://api.bilibili.com/x/msgfeed/reply?platform=web&build=0&mobi_app=web'); }
+  /** @ 我的（最新在前）。 */
+  atFeed() { return this.request('https://api.bilibili.com/x/msgfeed/at?platform=web&build=0&mobi_app=web'); }
+  /** 私信会话列表（含系统通知）。 */
+  dmSessions() { return this.request('https://api.vc.bilibili.com/session_svr/v1/session_svr/get_sessions?session_type=1&group_fold=1&unfollow_fold=0&sort_rule=2&build=0&mobi_app=web'); }
+  /** 和某人的最近私信（新的在前）。 */
+  dmMessages(talkerId, n = 20) { return this.request(`https://api.vc.bilibili.com/svr_sync/v1/svr_sync/fetch_session_msgs?talker_id=${Number(talkerId)}&session_type=1&size=${n}&build=0&mobi_app=web`); }
+
+  // ── 写操作（都要登录；csrf = cookie 里的 bili_jct）─────────────────────────
+  csrf() {
+    if (!this.cookies.bili_jct || !this.cookies.SESSDATA) throw new BiliError('没登录（或登录信息里缺 bili_jct），先在设置页扫码登录', 'no-login');
+    return this.cookies.bili_jct;
+  }
+
+  likeVideo(aid) {
+    return this.request('https://api.bilibili.com/x/web-interface/archive/like', { method: 'POST', form: { aid, like: 1, csrf: this.csrf() } });
+  }
+
+  /** 默认收藏夹的 id（标题带「默认」的那个；找不到就用第一个）。 */
+  async defaultFavFolder() {
+    const d = await this.request(`https://api.bilibili.com/x/v3/fav/folder/created/list-all?type=2&up_mid=${Number(this.cookies.DedeUserID)}`);
+    const list = d?.list ?? [];
+    const f = list.find((x) => /默认/.test(x.title)) ?? list[0];
+    if (!f) throw new BiliError('这个账号没有收藏夹', 'no-fav');
+    return Number(f.id);
+  }
+
+  favVideo(aid, folderId) {
+    return this.request('https://api.bilibili.com/x/v3/fav/resource/deal', { method: 'POST', form: { rid: aid, type: 2, add_media_ids: folderId, del_media_ids: '', csrf: this.csrf() } });
+  }
+
+  /** 发评论；给 root（和 parent）就是楼中楼。atNameToMid: {昵称: mid}，让正文里的「@昵称」变成真的 @。 */
+  addComment({ oid, type = 1, message, root = 0, parent = 0, atNameToMid = null }) {
+    const form = { oid, type, message, plat: 1, csrf: this.csrf() };
+    if (root && String(root) !== '0') { form.root = root; form.parent = parent && String(parent) !== '0' ? parent : root; }
+    if (atNameToMid && Object.keys(atNameToMid).length) form.at_name_to_mid = JSON.stringify(atNameToMid);
+    return this.request('https://api.bilibili.com/x/v2/reply/add', { method: 'POST', form });
+  }
+
+  delComment({ oid, type = 1, rpid }) {
+    return this.request('https://api.bilibili.com/x/v2/reply/del', { method: 'POST', form: { oid, type, rpid, csrf: this.csrf() } });
+  }
+
+  /** 发一条文字私信。新接口要求查询串里带 WBI 签名的发送者、接收者、设备号。 */
+  async sendDm({ receiverMid, text, devId = crypto.randomUUID().toUpperCase() }) {
+    const csrf = this.csrf();
+    const sender = Number(this.cookies.DedeUserID);
+    const q = wbiSign({ w_sender_uid: sender, w_receiver_id: Number(receiverMid), w_dev_id: devId }, await this.mixinKey());
+    return this.request(`https://api.vc.bilibili.com/web_im/v1/web_im/send_msg?${q}`, {
+      method: 'POST',
+      form: {
+        'msg[sender_uid]': sender, 'msg[receiver_type]': 1, 'msg[receiver_id]': Number(receiverMid),
+        'msg[msg_type]': 1, 'msg[msg_status]': 0, 'msg[dev_id]': devId, 'msg[timestamp]': Math.floor(Date.now() / 1000),
+        'msg[new_face_version]': 0, 'msg[content]': JSON.stringify({ content: text }),
+        from_firework: 0, build: 0, mobi_app: 'web', csrf_token: csrf, csrf,
+      },
+    });
+  }
+
+  /** 发一条纯文字动态。 */
+  postDynamic(text) {
+    const csrf = this.csrf();
+    const uid = Number(this.cookies.DedeUserID);
+    return this.request(`https://api.bilibili.com/x/dynamic/feed/create/dyn?platform=web&csrf=${csrf}`, {
+      method: 'POST',
+      json: {
+        dyn_req: {
+          content: { contents: [{ raw_text: text, type: 1, biz_id: '' }] },
+          scene: 1,
+          attach_card: null,
+          upload_id: `${uid}_${Math.floor(Date.now() / 1000)}_${Math.floor(1000 + Math.random() * 9000)}`,
+          meta: { app_meta: { from: 'create.dynamic.web', mobi_app: 'web' } },
+        },
+      },
+    });
   }
 }

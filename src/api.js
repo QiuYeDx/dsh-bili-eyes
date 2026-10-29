@@ -1,6 +1,6 @@
 // 设置页用的本地接口（挂在 DSH 的 webServer 上，同源；开发预览服务器也复用这个 handler）。
-//   GET  /api/bili-eyes?view=overview|config
-//   POST /api/bili-eyes {action, ...}   保存配置、扫码登录、清缓存、试看…
+//   GET  /api/bili-eyes?view=overview|config|inbox|act
+//   POST /api/bili-eyes {action, ...}   保存配置、扫码登录、清缓存、试看、刷列表、逛一圈、查收件箱、处理草稿…
 // 只接受同源请求，请求体 ≤ 16 KB。登录信息（cookies）永远不经过这个接口返回。
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,11 +10,17 @@ import { BiliClient } from './bili-api.js';
 import { loadConfig, saveConfig, DEFAULTS, FIELDS, CONFIG_FILE, DATA_DIR, DSH_HOME } from './config.js';
 import { loadCredential, saveCredential, removeCredential, qrGenerate, qrPoll } from './credential.js';
 import { readHistory, clearHistory } from './history.js';
-import { look, lookZoom, find, usage, resetLoginCache, InputError } from './look.js';
+import { look, lookZoom, find, usage, resetLoginCache, makeClient, InputError } from './look.js';
 import { BiliError } from './bili-api.js';
+import { feed } from './feed.js';
+import { surf } from './surf.js';
+import { loadInbox, saveInbox, markItems } from './inbox.js';
+import { pollInbox, ownerName } from './interact.js';
+import { loadDrafts, readAudit, todayCounts, confirm, deleteSent, deletedIds, KIND_TEXT, ActError } from './act.js';
+import { sessionContext } from './gate.js';
 
 export const API_ROUTE = '/api/bili-eyes';
-export const TOOL_NAMES = ['bili_look', 'bili_look_zoom', 'bili_find'];
+export const TOOL_NAMES = ['bili_look', 'bili_look_zoom', 'bili_find', 'bili_feed', 'bili_comments', 'bili_surf', 'bili_inbox', 'bili_like', 'bili_comment', 'bili_dm', 'bili_post', 'bili_confirm'];
 const RESULT_CACHE = path.join(DATA_DIR, 'cache');
 const PKG = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
@@ -115,7 +121,7 @@ async function loginInfo(force = false) {
     try {
       const nav = await new BiliClient({ cookies: cred.cookies }).nav();
       value = nav.isLogin
-        ? { state: 'ok', uname: nav.uname ?? cred.uname ?? '', mid: nav.mid ?? cred.mid ?? 0, vip: Boolean(nav.vipStatus), savedAt: cred.savedAt ?? '' }
+        ? { state: 'ok', uname: nav.uname ?? cred.uname ?? '', mid: nav.mid ?? cred.mid ?? 0, vip: Boolean(nav.vipStatus), level: nav.level_info?.current_level ?? null, savedAt: cred.savedAt ?? '' }
         : { state: 'expired', uname: cred.uname ?? '', savedAt: cred.savedAt ?? '' };
     } catch (e) {
       value = { state: 'unknown', uname: cred.uname ?? '', savedAt: cred.savedAt ?? '', error: String(e.message).slice(0, 120) };
@@ -161,6 +167,31 @@ async function getView(view, ctx) {
     };
   }
   if (view === 'config') return { config: cfg, defaults: DEFAULTS, fields: FIELDS, configFile: CONFIG_FILE };
+  if (view === 'inbox') {
+    const st = loadInbox();
+    return { items: st.items.slice(-60).reverse(), lastCheck: st.lastCheck, lastError: st.lastError, started: Boolean(st.baseline), on: cfg.inboxOn, gate: Boolean(cfg.gateUrl) };
+  }
+  if (view === 'act') {
+    const entries = readAudit(500);
+    const gone = deletedIds(entries);
+    const drafts = loadDrafts();
+    const login = await loginInfo();
+    let owner = '';
+    if (cfg.ownerMid) { try { owner = await ownerName(makeClient({ ...cfg, useLogin: true }).client, cfg); } catch { owner = ''; } }
+    return {
+      login,
+      owner: { mid: cfg.ownerMid, name: owner },
+      modes: { like: cfg.likeMode, comment: cfg.commentMode, dm: cfg.dmMode, post: cfg.postMode },
+      counts: todayCounts(entries),
+      quota: { like: cfg.likePerDay, comment: cfg.commentPerDay, reply: cfg.replyPerDay, dm: cfg.dmPerDay, post: cfg.postPerDay },
+      paused: cfg.writePaused,
+      pausedUntil: drafts.pausedUntil > Date.now() ? drafts.pausedUntil : 0,
+      drafts: drafts.list.filter((d) => d.status === 'pending').map((d) => ({ ...d, expired: Date.now() - d.createdAt > cfg.draftMinutes * 60_000 })),
+      log: entries.filter((e) => e.kind !== 'delete').slice(0, 60).map((e) => ({ ...e, deleted: gone.has(e.id) })),
+      kindText: KIND_TEXT,
+      gate: Boolean(cfg.gateUrl),
+    };
+  }
   throw new Error(`不认识的 view：${view}`);
 }
 
@@ -170,7 +201,7 @@ const CACHE_DIRS = {
   media: (cfg) => cfg.mediaDir,
 };
 
-async function postAction(body) {
+async function postAction(body, ctx) {
   const cfg = loadConfig();
   switch (body.action) {
     case 'saveConfig': return { config: saveConfig(body.config ?? {}) };
@@ -232,10 +263,44 @@ async function postAction(body) {
         }
         return { text: r.text, images: r.pngs.map(dataUrl), cached: Boolean(r.cached), ms: Date.now() - t, meta: r.meta ?? null, items: r.items ?? null };
       } catch (e) {
-        if (e instanceof InputError || e instanceof BiliError) throw new Error(e.message);
+        if (e instanceof InputError || e instanceof BiliError || e instanceof ActError) throw new Error(e.message);
         throw e;
       }
     }
+    case 'feed': {
+      const r = await feed({ source: body.source, up: body.up, limit: 12 }, { source: 'ui' });
+      return { items: r.items, title: r.meta.title };
+    }
+    case 'surf': {
+      const t = Date.now();
+      const r = await surf({ direction: body.direction ?? '' }, { source: 'ui', ask: ctx.ask?.() ?? null });
+      return { text: r.text, items: r.items ?? [], ms: Date.now() - t, model: Boolean(ctx.ask?.()) };
+    }
+    case 'inboxCheck': return pollInbox({ force: true });
+    case 'inboxMark': {
+      const st = loadInbox();
+      const n = markItems(st, body.ids, ['done', 'ignored', 'new'].includes(body.status) ? body.status : 'done');
+      saveInbox(st);
+      return { changed: n };
+    }
+    case 'gateTest': {
+      if (!cfg.gateUrl) throw new Error('还没填门卫地址（填好先保存）');
+      const t = Date.now();
+      const c = await sessionContext(cfg, 'gate-test');
+      if (/门卫没响应/.test(c.label)) throw new Error(c.label);
+      return { ms: Date.now() - t, label: c.label || '（门卫没给说明）' };
+    }
+    case 'ownerLookup': {
+      const mid = Number(body.mid);
+      if (!Number.isSafeInteger(mid) || mid <= 0) throw new Error('UID 是一串数字');
+      return { owner: await makeClient({ ...cfg, useLogin: true }).client.card(mid) };
+    }
+    case 'draft': {
+      const decision = body.decision === 'drop' ? 'drop' : 'send';
+      const client = decision === 'send' ? makeClient({ ...cfg, useLogin: true }).client : null;
+      return confirm(Number(body.id), decision, { cfg, client, via: 'ui' });
+    }
+    case 'deleteSent': return deleteSent(String(body.id ?? ''), { client: makeClient({ ...cfg, useLogin: true }).client });
     default: throw new Error(`不认识的操作：${body.action}`);
   }
 }
@@ -247,7 +312,7 @@ export function makeApiHandler(ctx = { registered: () => true }) {
     const url = new URL(req.url, 'http://local');
     try {
       if (req.method === 'GET') return json(res, 200, { ok: true, ...await getView(url.searchParams.get('view') || 'overview', ctx) });
-      if (req.method === 'POST') return json(res, 200, { ok: true, ...await postAction(await readBody(req)) });
+      if (req.method === 'POST') return json(res, 200, { ok: true, ...await postAction(await readBody(req), ctx) });
       return json(res, 405, { ok: false, error: '只支持 GET / POST' });
     } catch (e) {
       return json(res, 400, { ok: false, error: e.message, errors: e.errors });

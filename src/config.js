@@ -25,7 +25,40 @@ export const DEFAULTS = Object.freeze({
   mediaMaxMb: 2048,        // mediaDir 的容量上限
   ytdlpPath: '',           // yt-dlp 可执行文件（空 = PATH 上找）
   ffmpegPath: '',          // ffmpeg（空 = PATH 上找）
+  // 冲浪（bili_surf）
+  surfModel: '',           // 挑选和总结用的模型「provider/model」（空 = 跟调用它的会话一样）
+  surfTaste: '',           // 口味：喜欢看什么、不想看什么（给挑选那一步看）
+  surfPicks: 3,            // 一圈挑几条
+  surfCandidates: 24,      // 一圈先找多少候选
+  surfMaxSeconds: 3600,    // 比这更长的视频不进候选
+  surfPerHour: 6,          // 每小时最多逛几圈
+  // 收件箱
+  inboxOn: false,          // 后台轮询「回复我的 / @ 我的 / 私信」
+  inboxIntervalSeconds: 180,
+  inboxQuiet: '00:30-07:30', // 这个时段不查（空 = 全天查）
+  inboxDm: true,           // 也查私信
+  inboxNotifyPerHour: 6,   // 每小时最多转达几次
+  // 互动（写操作）：off 关 / approve 先起草等主人同意 / auto 在额度内直接发
+  ownerMid: 0,             // 主人的 B站 UID：@ 和私信只能对着他
+  likeMode: 'off',
+  commentMode: 'off',
+  dmMode: 'off',
+  postMode: 'off',
+  likePerDay: 30,
+  commentPerDay: 5,        // 顶层评论
+  replyPerDay: 10,         // 楼中楼回复
+  dmPerDay: 10,
+  postPerDay: 2,
+  writeGapSeconds: 60,     // 两次写操作之间至少隔多久
+  draftMinutes: 60,        // 草稿多久没同意就作废
+  writePaused: false,      // 全部停下
+  // 门卫（可选）：回答「这个会话是不是主人本人」「主人说过什么」，并转达收件箱
+  gateUrl: '',
+  gateHeader: '',          // 请求门卫时带的头，写成「名字: 值」
 });
+
+export const MODES = Object.freeze(['off', 'approve', 'auto']);
+const MODE_OPTIONS = [['off', '关'], ['approve', '先问主人'], ['auto', '直接发（在额度内）']];
 
 export function loadConfig(file = CONFIG_FILE) {
   let user = {};
@@ -54,6 +87,32 @@ export const FIELDS = Object.freeze([
   { key: 'mediaDir', group: 'paths', type: 'dir', label: '下载视频的目录', hint: '留空 = 系统临时目录' },
   { key: 'ytdlpPath', group: 'paths', type: 'exe', exe: 'yt-dlp', label: 'yt-dlp 路径', hint: '留空 = 在 PATH 上找' },
   { key: 'ffmpegPath', group: 'paths', type: 'exe', exe: 'ffmpeg', label: 'ffmpeg 路径', hint: '留空 = 在 PATH 上找' },
+  { key: 'surfTaste', group: 'surf', type: 'text', max: 500, multiline: true, label: '口味', hint: '喜欢看什么、不想看什么，挑视频时参考。比如「爱看游戏剧情、冷门科普；不看带货和低俗」' },
+  { key: 'surfModel', group: 'surf', type: 'text', max: 120, pattern: /^[^\s/]+\/\S+$/, patternHint: '写成 provider/model', label: '挑选和总结用的模型', hint: '写成 provider/model；留空 = 跟调用它的会话用同一个模型' },
+  { key: 'surfPicks', group: 'surf', type: 'int', min: 1, max: 5, unit: '条', label: '一圈挑几条' },
+  { key: 'surfCandidates', group: 'surf', type: 'int', min: 6, max: 60, unit: '条', label: '一圈先找多少候选' },
+  { key: 'surfMaxSeconds', group: 'surf', type: 'int', min: 60, max: 36000, scale: 60, unit: '分钟', label: '候选视频最长', hint: '更长的不进候选' },
+  { key: 'surfPerHour', group: 'surf', type: 'int', min: 1, max: 60, unit: '圈', label: '每小时最多逛几圈' },
+  { key: 'inboxOn', group: 'inbox', type: 'bool', label: '后台查收件箱', hint: '回复我的、@ 我的、私信；有新的就交给门卫转达' },
+  { key: 'inboxDm', group: 'inbox', type: 'bool', label: '也查私信', hint: '只转达主人的私信；别人的只记下来' },
+  { key: 'inboxIntervalSeconds', group: 'inbox', type: 'int', min: 60, max: 3600, unit: '秒', label: '多久查一次' },
+  { key: 'inboxQuiet', group: 'inbox', type: 'text', max: 11, pattern: /^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$/, patternHint: '写成 00:30-07:30', label: '安静时段', hint: '这段时间不查，比如 00:30-07:30；留空 = 全天查' },
+  { key: 'inboxNotifyPerHour', group: 'inbox', type: 'int', min: 1, max: 60, unit: '次', label: '每小时最多转达几次' },
+  { key: 'ownerMid', group: 'act', type: 'int', min: 0, max: Number.MAX_SAFE_INTEGER, label: '主人的 B站 UID', hint: '@ 和私信只能对着这个账号；0 = 没设置（不能 @、不能私信）' },
+  { key: 'likeMode', group: 'act', type: 'enum', options: MODE_OPTIONS, label: '点赞、收藏' },
+  { key: 'commentMode', group: 'act', type: 'enum', options: MODE_OPTIONS, label: '评论、回复' },
+  { key: 'dmMode', group: 'act', type: 'enum', options: MODE_OPTIONS, label: '私信主人' },
+  { key: 'postMode', group: 'act', type: 'enum', options: MODE_OPTIONS, label: '发动态' },
+  { key: 'likePerDay', group: 'act', type: 'int', min: 0, max: 200, unit: '次', label: '每天最多点赞/收藏' },
+  { key: 'commentPerDay', group: 'act', type: 'int', min: 0, max: 50, unit: '条', label: '每天最多评论' },
+  { key: 'replyPerDay', group: 'act', type: 'int', min: 0, max: 100, unit: '条', label: '每天最多回复' },
+  { key: 'dmPerDay', group: 'act', type: 'int', min: 0, max: 50, unit: '条', label: '每天最多私信' },
+  { key: 'postPerDay', group: 'act', type: 'int', min: 0, max: 10, unit: '条', label: '每天最多动态' },
+  { key: 'writeGapSeconds', group: 'act', type: 'int', min: 10, max: 3600, unit: '秒', label: '两次之间至少隔' },
+  { key: 'draftMinutes', group: 'act', type: 'int', min: 5, max: 1440, unit: '分钟', label: '草稿有效期', hint: '这么久没同意就作废' },
+  { key: 'writePaused', group: 'act', type: 'bool', label: '全部停下', hint: '打开后一切写操作都拒绝（草稿也发不出去）' },
+  { key: 'gateUrl', group: 'gate', type: 'text', max: 200, pattern: /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/\S*)?$/, patternHint: '只能是本机地址 http://127.0.0.1:端口/路径', label: '门卫地址', hint: '本机 HTTP 接口，回答「这个会话是不是主人本人」「主人说过什么」并转达收件箱；留空 = 只能在这里点同意' },
+  { key: 'gateHeader', group: 'gate', type: 'text', max: 200, pattern: /^[A-Za-z0-9-]+:\s*\S.*$/, patternHint: '写成「名字: 值」', label: '请求头', hint: '请求门卫时带上，比如 x-fish: 1' },
 ]);
 
 /** 校验一份完整配置，返回错误列表（空 = 合法）。 */
@@ -66,6 +125,11 @@ export function validateConfig(c) {
       if (!Number.isInteger(v) || v < f.min || v > f.max) errors.push(`${f.label}要是 ${show(f.min)}~${show(f.max)}${f.unit ? ` ${f.unit}` : ''} 之间的整数`);
     } else if (f.type === 'bool') {
       if (typeof v !== 'boolean') errors.push(`${f.label}要是开或关`);
+    } else if (f.type === 'enum') {
+      if (!f.options.some(([o]) => o === v)) errors.push(`${f.label}的选项不对`);
+    } else if (f.type === 'text') {
+      if (typeof v !== 'string' || v.length > f.max) errors.push(`${f.label}最多 ${f.max} 个字`);
+      else if (v && f.pattern && !f.pattern.test(v)) errors.push(`${f.label}：${f.patternHint}`);
     } else if (typeof v !== 'string' || (v !== '' && !path.isAbsolute(v))) {
       errors.push(`${f.label}要是绝对路径（或留空）`);
     } else if (f.type === 'exe' && v && !new RegExp(`^${f.exe}(\\.exe)?$`, 'i').test(path.basename(v))) {
@@ -80,7 +144,10 @@ export function saveConfig(patch, file = CONFIG_FILE) {
   const next = { ...loadConfig(file) };
   for (const [k, v] of Object.entries(patch ?? {})) {
     if (!(k in DEFAULTS)) continue;
-    next[k] = typeof DEFAULTS[k] === 'string' ? String(v ?? '').trim().replace(/\\/g, '/') : v;
+    const type = FIELDS.find((f) => f.key === k)?.type;
+    if (type === 'dir' || type === 'exe') next[k] = String(v ?? '').trim().replace(/\\/g, '/');
+    else if (typeof DEFAULTS[k] === 'string') next[k] = String(v ?? '').trim();
+    else next[k] = v;
   }
   const errors = validateConfig(next);
   if (errors.length) { const err = new Error(errors.join('；')); err.errors = errors; throw err; }

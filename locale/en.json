@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Bili Eyes",
-    "description": "Let the model watch Bilibili videos: storyboard sheets, captions, hot comments and danmaku highlights, plus in-site video search. Read-only and Bilibili-only; the settings page handles QR login, limits, cache and a test run."
+    "description": "Let the model watch Bilibili videos (storyboards, captions, hot comments, danmaku), search, browse feeds and comment sections, and check the inbox. Likes, comments, DMs and posts are off by default and can be enabled per type (off / ask the owner / auto) with daily caps and an audit log."
   }
 }

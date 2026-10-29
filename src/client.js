@@ -92,6 +92,8 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
 .be-btn.primary{background:var(--brand);border-color:var(--brand);color:#fff}
 .be-btn.danger{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 45%,transparent)}
 .be-btn.danger.armed{background:var(--bad);color:#fff;border-color:var(--bad)}
+.be-btn.primary:hover:not(:disabled){background:color-mix(in srgb,var(--brand) 88%,#000)}
+.be-btn.danger.armed:hover:not(:disabled){background:color-mix(in srgb,var(--bad) 88%,#000)}
 .be-btn:disabled{opacity:.5;cursor:default}
 .be-sheets{display:flex;flex-direction:column;gap:10px}
 .be-sheets img{width:100%;border-radius:var(--rs);border:1px solid var(--bd);display:block;cursor:zoom-in;background:var(--b2)}
@@ -257,14 +259,14 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
     }
 
     // ── 概览 ─────────────────────────────────────────────────────────────────
-    const KIND = { look: ['看', 'brand'], zoom: ['放大', 'brand'], find: ['搜', ''], file: ['本机视频', 'pink'] };
+    const KIND = { look: ['看', 'brand'], zoom: ['放大', 'brand'], find: ['搜', ''], file: ['本机视频', 'pink'], feed: ['刷列表', ''], surf: ['逛一圈', 'pink'], comments: ['评论区', ''] };
     const SOURCE = { tool: '她', ui: '试看', plugin: '插件', cli: '命令行', other: '' };
 
     function HistoryRow({ e }) {
       const [label, cls] = KIND[e.kind] ?? [e.kind, ''];
       const url = videoUrl(e);
       const meta = [];
-      if (e.kind === 'find') { if (e.ok) meta.push(`${e.results} 个结果`); }
+      if (['find', 'feed', 'surf', 'comments'].includes(e.kind)) { if (e.ok) meta.push(`${e.results} ${{ surf: '条挑中', comments: '条评论' }[e.kind] ?? '个结果'}`); }
       else if (e.ok) {
         if (e.duration) meta.push(e.to != null || e.from ? `${fmtDur(e.from || 0)}–${fmtDur(e.to ?? e.duration)} / ${fmtDur(e.duration)}` : fmtDur(e.duration));
         if (e.sheets) meta.push(`${e.sheets} 张图`);
@@ -416,53 +418,235 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
         check && h('div', { className: check.ok ? 'be-ok' : 'be-no' }, check.ok ? (check.version ? `✓ ${check.version}` : check.existed ? '✓ 可以写入' : '✓ 可以写入（文件夹已新建）') : `✗ ${check.error}`));
     }
 
-    function Settings({ toast }) {
+    // 主人 UID：填完点「核对」看昵称对不对
+    function OwnerField({ fld, value, onChange, hint }) {
+      const [who, setWho] = useState(null);
+      const check = () => api.post('ownerLookup', { mid: value }).then((r) => setWho({ ok: Boolean(r.owner.name), name: r.owner.name || '没查到这个 UID' }), (e) => setWho({ ok: false, name: e.message }));
+      return h(Field, { label: fld.label, hint, wide: true },
+        h('div', { className: 'be-row' },
+          h('input', { className: 'be-input mono be-grow', inputMode: 'numeric', value: value || '', placeholder: '主人的 B站 UID（个人空间网址里那串数字）', onChange: (e) => { const t = e.target.value.replace(/\D/g, ''); onChange(t ? Number(t) : 0); setWho(null); } }),
+          h(Btn, { disabled: !value, onClick: check }, '核对')),
+        who && h('div', { className: who.ok ? 'be-ok' : 'be-no' }, who.ok ? `✓ ${who.name}` : `✗ ${who.name}`));
+    }
+
+    // 一个设置项。设置页和冲浪 / 收件箱 / 互动页共用
+    function FieldInput({ fld, value, def, onChange }) {
+      const changed = value !== def;
+      const defText = def === '' ? '空' : (fld.scale ? def / fld.scale : def);
+      const hint = [fld.hint, changed && fld.type === 'int' ? `默认 ${defText}${fld.unit ?? ''}` : ''].filter(Boolean).join('；');
+      if (fld.type === 'bool') {
+        return h('div', { className: 'be-field' },
+          h('label', { className: 'be-switch' }, h('input', { type: 'checkbox', role: 'switch', checked: Boolean(value), onChange: (e) => onChange(e.target.checked) }), fld.label),
+          fld.hint && h('small', null, fld.hint));
+      }
+      if (fld.type === 'dir' || fld.type === 'exe') return h(PathField, { field: fld, value, onChange });
+      if (fld.key === 'ownerMid') return h(OwnerField, { fld, value, onChange, hint: fld.hint });
+      if (fld.type === 'enum') {
+        return h(Field, { label: fld.label, hint },
+          h('select', { className: 'be-select', value, onChange: (e) => onChange(e.target.value) }, fld.options.map(([v, l]) => h('option', { key: v, value: v }, l))));
+      }
+      if (fld.type === 'text') {
+        const props = { className: `be-input${fld.multiline ? '' : ' mono'}`, value: value ?? '', maxLength: fld.max, spellCheck: false, onChange: (e) => onChange(e.target.value) };
+        return h(Field, { label: fld.label, hint: fld.hint, wide: fld.multiline || fld.max > 60 },
+          fld.multiline ? h('textarea', { ...props, rows: 3, style: { resize: 'vertical' } }) : h('input', props));
+      }
+      return h(Field, { label: fld.label, hint },
+        h('div', { className: 'be-unit' },
+          h('input', {
+            className: 'be-input', type: 'number', step: 1, value: value === '' ? '' : (fld.scale ? value / fld.scale : value) ?? '',
+            min: fld.scale ? fld.min / fld.scale : fld.min, max: fld.scale ? fld.max / fld.scale : fld.max,
+            onChange: (e) => onChange(e.target.value === '' ? '' : Math.round(Number(e.target.value) * (fld.scale || 1))),
+          }),
+          fld.unit && h('span', null, fld.unit)));
+    }
+
+    /** 几组设置项。groups: [[分组, 标题, 说明]]；actions: {分组: (保存后的配置) => 额外按钮} */
+    function ConfigGroups({ groups, toast, actions = {}, footer = false, onSaved }) {
       const st = useView('config');
       const [draft, setDraft] = useState(null);
-      useEffect(() => { if (st.data) setDraft(st.data.config); }, [st.data]);
+      const [saved, setSaved] = useState(null);
+      useEffect(() => { if (st.data) { setDraft(st.data.config); setSaved(st.data.config); } }, [st.data]);
       return h(Loading, { state: st }, (d) => {
-        if (!draft) return null;
-        const fields = d.fields;
-        const shown = (fld) => (fld.scale ? draft[fld.key] / fld.scale : draft[fld.key]);
-        const setVal = (fld, v) => setDraft({ ...draft, [fld.key]: v });
+        if (!draft || !saved) return null;
         const save = (group, label) => {
           const patch = {};
-          for (const fld of fields.filter((x) => x.group === group)) patch[fld.key] = draft[fld.key];
-          api.post('saveConfig', { config: patch }).then((r) => { setDraft(r.config); toast(`${label}已保存，马上生效`); }, (e) => toast(e.message, true));
+          for (const fld of d.fields.filter((x) => x.group === group)) patch[fld.key] = draft[fld.key];
+          api.post('saveConfig', { config: patch }).then((r) => { setDraft(r.config); setSaved(r.config); toast(`${label}已保存，马上生效`); onSaved?.(r.config); }, (e) => toast(e.message, true));
         };
-        const reset = (group) => api.post('resetConfig', { group }).then((r) => { setDraft(r.config); toast('已恢复默认'); }, (e) => toast(e.message, true));
+        const reset = (group) => api.post('resetConfig', { group }).then((r) => { setDraft(r.config); setSaved(r.config); toast('已恢复默认'); onSaved?.(r.config); }, (e) => toast(e.message, true));
         return h(React.Fragment, null,
-          GROUPS.map(([group, label, desc]) => {
-            const list = fields.filter((x) => x.group === group);
-            const dirty = list.some((x) => draft[x.key] !== d.config[x.key]);
+          groups.map(([group, label, desc]) => {
+            const list = d.fields.filter((x) => x.group === group);
+            const dirty = list.some((x) => draft[x.key] !== saved[x.key]);
             return h(Card, { key: group, title: label, desc, aside: dirty ? '有未保存的修改' : '' },
-              h('div', { className: 'be-fields' }, list.map((fld) => {
-                if (fld.type === 'bool') {
-                  return h('div', { key: fld.key, className: 'be-field' },
-                    h('label', { className: 'be-switch' }, h('input', { type: 'checkbox', role: 'switch', checked: Boolean(draft[fld.key]), onChange: (e) => setVal(fld, e.target.checked) }), fld.label),
-                    fld.hint && h('small', null, fld.hint));
-                }
-                if (fld.type === 'dir' || fld.type === 'exe') return h(PathField, { key: fld.key, field: fld, value: draft[fld.key], onChange: (v) => setVal(fld, v) });
-                const isDefault = draft[fld.key] === d.defaults[fld.key];
-                return h(Field, { key: fld.key, label: fld.label, hint: [fld.hint, isDefault ? '' : `默认 ${fld.scale ? d.defaults[fld.key] / fld.scale : d.defaults[fld.key]}${fld.unit ?? ''}`].filter(Boolean).join('；') },
-                  h('div', { className: 'be-unit' },
-                    h('input', {
-                      className: 'be-input', type: 'number', step: 1, value: shown(fld) ?? '',
-                      min: fld.scale ? fld.min / fld.scale : fld.min, max: fld.scale ? fld.max / fld.scale : fld.max,
-                      onChange: (e) => setVal(fld, e.target.value === '' ? '' : Math.round(Number(e.target.value) * (fld.scale || 1))),
-                    }),
-                    fld.unit && h('span', null, fld.unit)));
-              })),
+              h('div', { className: 'be-fields' }, list.map((fld) => h(FieldInput, { key: fld.key, fld, value: draft[fld.key], def: d.defaults[fld.key], onChange: (v) => setDraft({ ...draft, [fld.key]: v }) }))),
               h('div', { className: 'be-row' },
                 h(Btn, { kind: 'primary', disabled: !dirty, onClick: () => save(group, label) }, '保存'),
-                h(Btn, { onClick: () => reset(group) }, '恢复默认')));
+                h(Btn, { onClick: () => reset(group) }, '恢复默认'),
+                actions[group]?.(saved)));
           }),
-          h('div', { className: 'be-faint' }, `保存后立即生效，不用重启 DSH。配置文件：${d.configFile}（只记和默认值不同的项）`));
+          footer && h('div', { className: 'be-faint' }, `保存后立即生效，不用重启 DSH。配置文件：${d.configFile}（只记和默认值不同的项）`));
       });
     }
 
+    function Settings({ toast }) {
+      return h(ConfigGroups, { groups: GROUPS, toast, footer: true });
+    }
+
+    // ── 冲浪 ─────────────────────────────────────────────────────────────────
+    const FEEDS = [['recommend', '首页推荐'], ['hot', '热门'], ['rank', '排行'], ['following', '关注'], ['up', 'UP 主']];
+
+    function VideoItems({ items }) {
+      return h('div', { className: 'be-items' }, items.map((x) => h('div', { key: x.bvid, className: 'be-item' },
+        h('a', { href: `https://www.bilibili.com/video/${x.bvid}`, target: '_blank', rel: 'noreferrer' }, x.title),
+        h('div', { className: 'be-faint' }, [x.author, x.seconds ? fmtDur(x.seconds) : '', `播放 ${fmtNum(x.play)}`, x.pubdate ? new Date(x.pubdate * 1000).toLocaleDateString() : ''].filter(Boolean).join(' · ')))));
+    }
+
+    function Surf({ toast }) {
+      const [src, setSrc] = useState('recommend');
+      const [up, setUp] = useState('');
+      const [list, setList] = useState(null);       // {loading, items, title, error}
+      const [dir, setDir] = useState('');
+      const [run, setRun] = useState(null);
+      const [res, setRes] = useState(null);
+      const load = (source = src) => {
+        if (source === 'up' && !up.trim()) { setList(null); return; }
+        setList({ loading: true });
+        api.post('feed', { source, up }).then((r) => setList({ items: r.items, title: r.title }), (e) => setList({ error: e.message }));
+      };
+      useEffect(() => { load('recommend'); }, []);
+      const go = () => {
+        setRes(null); setRun({ since: Date.now() });
+        api.post('surf', { direction: dir }).then(setRes, (e) => setRes({ error: e.message })).finally(() => setRun(null));
+      };
+      return h(React.Fragment, null,
+        h(Card, { title: '刷列表', desc: '她用 bili_feed 看到的就是这些。登录后「首页推荐」按这个账号的口味推，逛得越多越准。' },
+          h('div', { className: 'be-row' },
+            h('div', { className: 'be-seg', role: 'group' }, FEEDS.map(([id, label]) => h('button', { key: id, type: 'button', 'aria-pressed': src === id, onClick: () => { setSrc(id); if (id !== 'up') load(id); else setList(null); } }, label))),
+            src === 'up' && h('input', { className: 'be-input be-grow', value: up, placeholder: 'UP 主昵称或 UID', onChange: (e) => setUp(e.target.value), onKeyDown: (e) => { if (e.key === 'Enter') load('up'); } }),
+            h(Btn, { onClick: () => load() }, src === 'up' ? '看投稿' : '换一批')),
+          list?.loading && h('div', { className: 'be-empty' }, h('span', { className: 'be-spin', style: { marginRight: 8 } }), '加载中…'),
+          list?.error && h('div', { className: 'be-no' }, list.error),
+          list?.items && (list.items.length ? h(VideoItems, { items: list.items }) : h('div', { className: 'be-empty' }, '是空的'))),
+        h(Card, { title: '逛一圈', desc: '和她调用 bili_surf 一样：找候选 → 挑几条 → 快速看 → 交一份摘要。在 DSH 里会用模型挑选和总结；本地预览没有模型，按播放量挑。' },
+          h('div', { className: 'be-row' },
+            h('input', { className: 'be-input be-grow', value: dir, maxLength: 50, placeholder: '方向（可选），比如：游戏剧情、冷门科普', onChange: (e) => setDir(e.target.value), onKeyDown: (e) => { if (e.key === 'Enter' && !run) go(); } }),
+            h(Btn, { kind: 'primary', disabled: Boolean(run), onClick: go }, run ? '逛着呢…' : '逛一圈'),
+            run && h(Elapsed, { since: run.since })),
+          res && (res.error
+            ? h('div', { className: 'be-no' }, res.error)
+            : h(React.Fragment, null,
+              h('div', { className: 'be-faint' }, `${fmtMs(res.ms)} · ${res.model ? '用了模型挑选和总结' : '没用模型（按播放量挑，材料直接截取）'}`),
+              h('pre', { className: 'be-pre' }, res.text)))),
+        h(ConfigGroups, { groups: [['surf', '冲浪设置', '逛的时候怎么挑：口味、用哪个模型、一圈几条。']], toast }));
+    }
+
+    // ── 收件箱 ───────────────────────────────────────────────────────────────
+    const IN_KIND = { reply: ['回复', 'brand'], at: ['@', 'pink'], dm: ['私信', 'ok'] };
+    const IN_STATUS = { new: ['新', 'brand'], notified: ['已转达', ''], done: ['处理完', 'ok'], ignored: ['忽略', ''] };
+
+    function Inbox({ toast, active }) {
+      const st = useView('inbox');
+      const [busy, setBusy] = useState(false);
+      const first = useRef(true);
+      useEffect(() => { if (first.current) { first.current = false; return; } if (active) st.reload(); }, [active]);
+      const check = () => {
+        setBusy(true);
+        api.post('inboxCheck').then((r) => { toast(r.error ? `没查成：${r.error}` : r.baseline ? '第一次查：已记下现在的位置，之后的新消息才算' : `查完了：新消息 ${r.added} 条，转达 ${r.delivered} 条`, Boolean(r.error)); st.reload(); }, (e) => toast(e.message, true)).finally(() => setBusy(false));
+      };
+      const mark = (ids, status) => api.post('inboxMark', { ids, status }).then(() => st.reload(), (e) => toast(e.message, true));
+      return h(React.Fragment, null,
+        h(Loading, { state: st }, (d) => h(React.Fragment, null,
+          h(Card, { title: '收件箱', aside: d.lastCheck ? `上次查：${when(d.lastCheck)}` : '还没查过', desc: '回复我的、@ 我的、私信。后台按设置定时查，有新的就交给门卫转达（比如转成 QQ 里叫醒她）。' },
+            h('div', { className: 'be-row' },
+              h('span', { className: `be-badge ${d.on ? 'ok' : ''}` }, d.on ? '后台在查' : '后台没开'),
+              h('span', { className: `be-badge ${d.gate ? 'ok' : ''}` }, d.gate ? '门卫已配置' : '没配门卫：只在这里显示')),
+            d.lastError && h('div', { className: 'be-err' }, `上次出错：${d.lastError}`),
+            h('div', { className: 'be-row' }, h(Btn, { kind: 'primary', disabled: busy, onClick: check }, busy ? '查着呢…' : '现在查一次'))),
+          h(Card, { title: '消息', aside: d.items.length ? `最近 ${d.items.length} 条` : '' },
+            d.items.length
+              ? h('div', { className: 'be-hist' }, d.items.map((x) => {
+                const [kl, kc] = IN_KIND[x.kind] ?? [x.kind, ''];
+                const [sl, sc] = IN_STATUS[x.status] ?? [x.status, ''];
+                const open = x.status === 'new' || x.status === 'notified';
+                return h('div', { key: x.id, className: 'be-hrow' },
+                  h('div', { className: 'when' }, when(x.at)),
+                  h('div', { style: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 } },
+                    h('div', { className: 'be-htitle' },
+                      h('span', { className: `be-badge ${kc}` }, kl),
+                      h('span', { className: 't' }, x.user.name || `UID ${x.user.mid}`),
+                      x.owner && h('span', { className: 'be-badge pink' }, '主人'),
+                      h('span', { className: `be-badge ${sc}` }, sl),
+                      h('span', { className: 'be-faint' }, x.id)),
+                    h('div', null, x.text),
+                    x.mine && h('div', { className: 'be-faint' }, `我说的是：${x.mine}`),
+                    x.where?.title && h('div', { className: 'be-faint' }, x.where.uri ? h('a', { href: x.where.uri, target: '_blank', rel: 'noreferrer', style: { color: 'inherit' } }, `《${x.where.title}》`) : `《${x.where.title}》`),
+                    open && h('div', { className: 'be-row' }, h(Btn, { onClick: () => mark([x.id], 'done') }, '处理完'), h(Btn, { onClick: () => mark([x.id], 'ignored') }, '忽略'))));
+              }))
+              : h('div', { className: 'be-empty' }, d.started ? '还没有新消息。' : '还没查过：点「现在查一次」先记下现在的位置。')))),
+        h(ConfigGroups, {
+          groups: [['inbox', '收件箱设置', '多久查一次、什么时候不查、每小时最多打扰几次。'], ['gate', '门卫', '可选。一个本机接口：告诉插件「这个会话是不是主人本人」「主人说过什么」，并把收件箱的新消息转达出去。没有门卫时草稿只能在「互动」页同意。']],
+          toast,
+          actions: { gate: (saved) => saved.gateUrl && h(Btn, { onClick: () => api.post('gateTest').then((r) => toast(`门卫正常（${fmtMs(r.ms)}）：${r.label}`), (e) => toast(e.message, true)) }, '测试门卫') },
+        }));
+    }
+
+    // ── 互动 ─────────────────────────────────────────────────────────────────
+    const MODE_TEXT = { off: ['关', ''], approve: ['先问主人', 'brand'], auto: ['直接发', 'pink'] };
+    const LOG_STATUS = { ok: ['已发', 'ok'], fail: ['失败', 'bad'], refused: ['拒绝', ''], draft: ['起草', 'brand'], rejected: ['丢掉', ''] };
+
+    function Interact({ toast, active }) {
+      const st = useView('act');
+      const first = useRef(true);
+      useEffect(() => { if (first.current) { first.current = false; return; } if (active) st.reload(); }, [active]);
+      const draftDo = (id, decision) => api.post('draft', { id, decision }).then((r) => { toast(r.text, r.status === 'failed' || r.status === 'refused' && decision === 'send'); st.reload(); }, (e) => toast(e.message, true));
+      const del = (id) => api.post('deleteSent', { id }).then(() => { toast('已在 B站删掉'); st.reload(); }, (e) => toast(e.message, true));
+      return h(React.Fragment, null,
+        h(Loading, { state: st }, (d) => {
+          const lvl = d.login.level;
+          const kinds = [['like', '点赞/收藏', d.counts.like + (d.counts.fav ?? 0) || 0, d.quota.like], ['comment', '评论', d.counts.comment ?? 0, d.quota.comment], ['reply', '回复', d.counts.reply ?? 0, d.quota.reply], ['dm', '私信', d.counts.dm ?? 0, d.quota.dm], ['post', '动态', d.counts.post ?? 0, d.quota.post]];
+          return h(React.Fragment, null,
+            h('div', { className: 'be-grid' },
+              h(Card, { title: '账号' },
+                d.login.state === 'ok'
+                  ? h(React.Fragment, null,
+                    h('div', { className: 'be-row' }, h('div', { className: 'be-big' }, d.login.uname), lvl != null && h('span', { className: `be-badge ${lvl === 0 ? 'bad' : 'ok'}` }, `LV${lvl}`)),
+                    lvl === 0 && h('div', { className: 'be-err' }, 'LV0（未转正）：B站不让发评论和弹幕。去 B站 App 答题转正后再打开「评论、回复」。'))
+                  : h('div', { className: 'be-no' }, '没登录：去「概览」扫码登录（建议用小号）'),
+                h('div', { className: 'be-faint' }, d.owner.mid ? `主人：${d.owner.name || '（昵称没查到）'}（UID ${d.owner.mid}）` : '还没设置主人 UID：不能 @ 主人、不能私信'),
+                h('div', { className: 'be-row' }, Object.entries(d.modes).map(([k, m]) => h('span', { key: k, className: `be-badge ${MODE_TEXT[m][1]}` }, `${{ like: '点赞', comment: '评论', dm: '私信', post: '动态' }[k]}：${MODE_TEXT[m][0]}`)))),
+              h(Card, { title: '今天' },
+                (d.paused || d.pausedUntil > 0) && h('div', { className: 'be-err' }, d.paused ? '已按「全部停下」：所有写操作都会被拒绝' : `刚被 B站风控拦过：写操作暂停到 ${new Date(d.pausedUntil).toLocaleTimeString()}`),
+                kinds.map(([k, label, used, max]) => h(Meter, { key: k, label, used, max })))),
+            h(Card, { title: '待同意', aside: d.drafts.length ? `${d.drafts.length} 条` : '', desc: d.gate ? '她起草后会先在聊天里问主人；主人说「发」她会自己发出。你也可以直接在这里处理。' : '没配门卫：她没法确认主人同意，草稿只能在这里处理。' },
+              d.drafts.length
+                ? h('div', { className: 'be-items' }, d.drafts.map((x) => h('div', { key: x.id, className: 'be-item' },
+                  h('div', { className: 'be-htitle' }, h('span', { className: 'be-badge brand' }, `#${x.id}`), h('span', { className: 'be-badge' }, d.kindText[x.kind]), x.where && h('span', { className: 'be-faint' }, x.where), h('span', { className: 'be-faint' }, when(x.createdAt))),
+                  h('div', null, x.preview),
+                  x.target?.title && h('div', { className: 'be-faint' }, x.target.url ? h('a', { href: x.target.url, target: '_blank', rel: 'noreferrer', style: { color: 'inherit' } }, `《${x.target.title}》`) : `《${x.target.title}》`),
+                  x.expired ? h('div', { className: 'be-faint' }, '已过期') : h('div', { className: 'be-row' }, h(Btn, { kind: 'primary', onClick: () => draftDo(x.id, 'send') }, '同意并发出'), h(Btn, { onClick: () => draftDo(x.id, 'drop') }, '丢掉')))))
+                : h('div', { className: 'be-empty' }, '没有待同意的草稿。')),
+            h(Card, { title: '记录', aside: d.log.length ? `最近 ${d.log.length} 条` : '' },
+              d.log.length
+                ? h('div', { className: 'be-hist' }, d.log.map((e) => {
+                  const [sl, sc] = LOG_STATUS[e.status] ?? [e.status, ''];
+                  const canDel = e.status === 'ok' && (e.kind === 'comment' || e.kind === 'reply') && e.rpid && !e.deleted;
+                  return h('div', { key: e.id, className: 'be-hrow' },
+                    h('div', { className: 'when' }, when(e.at)),
+                    h('div', { style: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 } },
+                      h('div', { className: 'be-htitle' }, h('span', { className: `be-badge ${sc}` }, sl), h('span', { className: 'be-badge' }, d.kindText[e.kind] ?? e.kind), e.draft && h('span', { className: 'be-faint' }, `#${e.draft}`), e.deleted && h('span', { className: 'be-badge' }, '已删除'),
+                        e.target?.title && (e.target.url ? h('a', { href: e.target.url, target: '_blank', rel: 'noreferrer', title: e.target.title }, e.target.title) : h('span', { className: 't' }, e.target.title))),
+                      e.text && h('div', null, e.text),
+                      e.error && h('div', { className: 'be-err' }, e.error),
+                      canDel && h('div', null, h(ConfirmBtn, { label: '在 B站删掉', confirmLabel: '确认删除？', onConfirm: () => del(e.id) }))));
+                }))
+                : h('div', { className: 'be-empty' }, '还没有写操作。')));
+        }),
+        h(ConfigGroups, { groups: [['act', '互动设置', '每一类写操作的档位和每天上限。默认全关；「先问主人」会先起草，主人同意才发。@ 和私信只能对着主人。']], toast, onSaved: () => st.reload() }));
+    }
+
     // ── 页面 ─────────────────────────────────────────────────────────────────
-    const TABS = [['overview', '概览', Overview], ['try', '试看', Try], ['settings', '设置', Settings]];
+    const TABS = [['overview', '概览', Overview], ['try', '试看', Try], ['surf', '冲浪', Surf], ['inbox', '收件箱', Inbox], ['act', '互动', Interact], ['settings', '设置', Settings]];
     function BiliEyes() {
       const [tab, setTab] = useState(() => { try { return localStorage.getItem('dsh-bili-eyes:tab') || 'overview'; } catch { return 'overview'; } });
       const [msg, setMsg] = useState(null);
@@ -470,7 +654,7 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
       useEffect(() => { if (!msg) return undefined; const t = setTimeout(() => setMsg(null), msg.bad ? 6000 : 2500); return () => clearTimeout(t); }, [msg]);
       useEffect(() => { try { localStorage.setItem('dsh-bili-eyes:tab', tab); } catch { /* 忽略 */ } }, [tab]);
       return h('div', { className: 'be' },
-        h('header', { className: 'be-head' }, h('h2', null, 'B站看视频'), h('p', null, '让模型看 B站视频、在 B站搜视频。只读，只认 B站链接；这里的改动立即生效。')),
+        h('header', { className: 'be-head' }, h('h2', null, 'B站看视频'), h('p', null, '让模型看 B站视频、逛 B站、看收件箱；点赞评论这类写操作默认全关，在「互动」里逐项打开。这里的改动立即生效。')),
         h('nav', { className: 'be-tabs', role: 'tablist' }, TABS.map(([id, label]) => h('button', { key: id, type: 'button', role: 'tab', className: 'be-tab', 'aria-selected': tab === id, onClick: () => setTab(id) }, label))),
         // 三个页签都挂着、只是隐藏：试看跑到一半切走再回来，结果还在
         TABS.map(([id, , Page]) => h('div', { key: id, hidden: tab !== id, style: { display: tab === id ? 'flex' : 'none', flexDirection: 'column', gap: 16 } }, h(Page, { toast, active: tab === id }))),
