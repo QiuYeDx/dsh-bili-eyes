@@ -1,25 +1,48 @@
 {
   "name": "dsh-bili-eyes",
-  "version": "0.3.0",
-  "description": "DeepSeek Harness 插件：让模型「看」B站视频——一张分镜图（基于 dsh-video-storyboard）+ 台词 + 热评 + 弹幕热词，只读、只认 B站链接，适合接给 QQ 机器人。",
-  "keywords": ["dsh", "dsh-plugin", "deepseek-harness", "bilibili", "video", "storyboard", "qq-bot"],
+  "version": "0.4.0",
+  "description": "DeepSeek Harness 插件：让模型「看」B站视频——分镜图（基于 dsh-video-storyboard）+ 台词 + 热评 + 弹幕热词，还能站内搜视频；只读、只认 B站链接。DSH 设置里带管理界面（扫码登录、限额、缓存、试看）。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "bilibili",
+    "video",
+    "storyboard",
+    "qq-bot"
+  ],
   "license": "MIT",
   "author": "QiuYeDx",
   "type": "module",
   "main": "./src/index.js",
   "exports": {
     ".": "./src/index.js",
-    "./look": "./src/look.js"
+    "./look": "./src/look.js",
+    "./client": "./src/client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
   },
   "bin": {
     "dsh-bili-eyes": "./bin/cli.mjs"
   },
-  "files": ["src", "bin", "cordis.patch.yml", "dsh.plugin.json", "README.md", "LICENSE"],
-  "engines": { "node": ">=20" },
+  "files": [
+    "src",
+    "bin",
+    "locale",
+    "assets",
+    "cordis.patch.yml",
+    "dsh.plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "test": "node --test test/*.test.mjs",
+    "test": "node --test test/unit.test.mjs test/contract.test.mjs test/settings.test.mjs",
     "login": "node bin/cli.mjs login",
-    "status": "node bin/cli.mjs status"
+    "status": "node bin/cli.mjs status",
+    "preview": "node dev/preview.mjs"
   },
   "dependencies": {
     "dsh-video-storyboard": "0.4.4",
@@ -29,9 +52,20 @@
     "@deepseek-ai/dsh-tools": ">=0.1.0-rc.7"
   },
   "peerDependenciesMeta": {
-    "@deepseek-ai/dsh-tools": { "optional": true }
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    }
   },
   "dsh": {
-    "bundle": { "patch": "./cordis.patch.yml" }
-  }
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
+    }
+  },
+  "icon": "./assets/icon.svg"
 }

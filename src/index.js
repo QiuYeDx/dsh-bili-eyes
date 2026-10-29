@@ -1,5 +1,6 @@
-// DSH 插件入口：注册 bili_look、bili_look_zoom、bili_find 三个只读工具。
+// DSH 插件入口：注册 bili_look、bili_look_zoom、bili_find 三个只读工具；宿主有 webServer 时再挂设置页接口。
 // 工具结果 = 分镜图（附件）+ 文字素材。图片必须先经 ctx.attachments.saveImage() 提交才能放进结果。
+// 设置页界面在 src/client.js（DSH 设置侧边栏的「B站看视频」），接口在 src/api.js。
 import { look, lookZoom, find, InputError } from './look.js';
 import { BiliError } from './bili-api.js';
 
@@ -94,8 +95,24 @@ export function toolSpecs() {
   };
 }
 
+// 设置页接口：webServer 不是每个宿主都有（cordis 没有可选依赖），用子插件按需挂上
+function mountApi(ctx, status) {
+  try {
+    ctx.inject(['webServer'], async (sub) => {
+      const { makeApiHandler, API_ROUTE } = await import('./api.js');
+      // 和 apply 一样：返回的函数在子插件卸载时调用
+      return sub.webServer.register({ kind: 'exact', path: API_ROUTE, handler: makeApiHandler(status) });
+    });
+  } catch (e) {
+    try { ctx?.logger?.warn?.(`[dsh-bili-eyes] 设置页接口没挂上：${e?.message ?? e}`); } catch { /* 忽略 */ }
+  }
+}
+
 export async function apply(ctx) {
   // 插件出错只让插件不可用，不能让 DSH 起不来
+  let registered = false;
+  let registerError = '';
+  mountApi(ctx, { registered: () => registered, registerError: () => registerError });
   try {
     const defineTool = await loadDefineTool();
     const specs = toolSpecs();
@@ -109,7 +126,7 @@ export async function apply(ctx) {
     };
     const run = (fn, prefix) => async (args) => {
       try {
-        const r = await fn(args, { log });
+        const r = await fn(args, { log, source: 'tool' });
         return { text: r.text, images: await attach(r.pngs, prefix) };
       } catch (e) {
         // 输入错误（不是 B站链接、短链失效）和 B站那边的拒绝（风控、限流）给模型一句人话，别的错误照常抛出
@@ -123,8 +140,10 @@ export async function apply(ctx) {
       ctx.tools.register(defineTool({ ...specs.zoom, execute: run(lookZoom, 'bili-zoom'), isConcurrencySafe: () => true })),
       ctx.tools.register(defineTool({ ...specs.find, execute: run(find, 'bili-find'), isConcurrencySafe: () => true })),
     ];
+    registered = true;
     return () => { for (const d of disposers) { try { d?.(); } catch { /* 忽略 */ } } };
   } catch (e) {
+    registerError = String(e?.message ?? e);   // 设置页「概览 → 状态检查」里显示
     try { ctx?.logger?.error?.(`[dsh-bili-eyes] 加载失败：${e?.stack ?? e}`); } catch { /* 忽略 */ }
     if (process.env.DSH_BILI_EYES_DEBUG) throw e;
     return () => {};

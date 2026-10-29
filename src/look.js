@@ -11,6 +11,7 @@ import { loadConfig, applyEnv, DATA_DIR } from './config.js';
 import { loadCredential, COOKIES_TXT } from './credential.js';
 import { danmakuStats, parseDanmaku } from './danmaku.js';
 import { parseInput, resolveShort, canonicalUrl, InputError } from './url.js';
+import { record } from './history.js';
 
 // 放大重看要用到 fetch.js 里的直链解析；它不在包的 exports 里，按文件路径引入（依赖版本已锁定）
 const fetchMod = import(new URL('./fetch.js', import.meta.resolve('dsh-video-storyboard/pipeline')).href);
@@ -90,10 +91,20 @@ function overHourly(max) {
   return recent.length >= max;
 }
 let slot = Promise.resolve();   // 同一时间只跑一个分镜，其余排队
+let pending = 0;                // 正在跑 + 排队的分镜数（设置页显示）
 function exclusive(fn) {
-  const p = slot.then(fn, fn);
+  pending += 1;
+  const p = slot.then(fn, fn).finally(() => { pending -= 1; });
   slot = p.catch(() => {});
   return p;
+}
+
+/** 这一小时的用量（只统计本进程，也就是 DSH 里的调用）。 */
+export function usage(cfg = loadConfig()) {
+  const now = Date.now();
+  while (recent.length && now - recent[0] > 3600_000) recent.shift();
+  while (findRecent.length && now - findRecent[0] > 3600_000) findRecent.shift();
+  return { watched: recent.length, maxPerHour: cfg.maxPerHour, searched: findRecent.length, maxFindPerHour: cfg.maxFindPerHour, running: pending };
 }
 function withTimeout(promise, ms) {
   let timer;
@@ -121,6 +132,8 @@ function writeCache(key, text, pngs) {
 
 // ── 登录状态（每小时最多检查一次）──────────────────────────────────────────
 let loginCheck = { at: 0, sess: '', state: 'none', uname: '' };
+/** 设置页里重新登录 / 退出后，下次调用重新检查登录状态。 */
+export function resetLoginCache() { loginCheck = { at: 0, sess: '', state: 'none', uname: '' }; }
 async function loginState(client, cred) {
   if (!cred) return { state: 'none' };
   if (loginCheck.sess === cred.cookies.SESSDATA && Date.now() - loginCheck.at < 3600_000) return loginCheck;
@@ -152,7 +165,7 @@ function makeClient(cfg) {
  * @param {{url:string, from?:number, to?:number, detail?:'low'|'med'}} args
  * @returns {Promise<{text:string, pngs:Buffer[], cached:boolean}>}
  */
-export async function look(args, { cfg = loadConfig(), log = () => {} } = {}) {
+async function lookImpl(args, { cfg = loadConfig(), log = () => {} } = {}) {
   applyEnv(cfg);
   const { client, cred } = makeClient(cfg);
   const login = await loginState(client, cred);
@@ -174,9 +187,10 @@ export async function look(args, { cfg = loadConfig(), log = () => {} } = {}) {
   const span = (to ?? duration) - from;
   const sheets = sheetsFor(span, cfg);
 
+  const meta = { title: v.title, bvid: v.bvid, page: video.page, duration, from, to, sheets };
   const key = cacheKey(['look', 3, v.bvid, video.page, from, to, detail, login.state === 'ok']);
   const hit = readCache(key, cfg.cacheHours);
-  if (hit) return { ...hit, cached: true };
+  if (hit) return { ...hit, cached: true, meta };
 
   const limited = overHourly(cfg.maxPerHour);
 
@@ -275,14 +289,14 @@ export async function look(args, { cfg = loadConfig(), log = () => {} } = {}) {
   }
   const text = [head, body, tail].filter(Boolean).join('\n\n');
   if (pngs.length) writeCache(key, text, pngs);
-  return { text, pngs, cached: false };
+  return { text, pngs, cached: false, meta: { ...meta, sheets: pngs.length, note: visualNote } };
 }
 
 /**
  * 放大看某几秒（格子少、每格大，尽量从高清流取帧）。
  * @param {{url:string, from:number, to:number, cells?:number}} args
  */
-export async function lookZoom(args, { cfg = loadConfig(), log = () => {} } = {}) {
+async function lookZoomImpl(args, { cfg = loadConfig(), log = () => {} } = {}) {
   applyEnv(cfg);
   const { client, cred } = makeClient(cfg);
   const login = await loginState(client, cred);
@@ -293,9 +307,10 @@ export async function lookZoom(args, { cfg = loadConfig(), log = () => {} } = {}
   if (to - from > 60) throw new InputError('放大看一次最多 60 秒；更长的段落用 bili_look 加 from/to');
   const cells = Math.min(9, Math.max(1, Math.round(args.cells ?? 6)));
 
+  const meta = { title: video.v.title, bvid: video.v.bvid, page: video.page, duration: video.duration, from, to, sheets: 1 };
   const key = cacheKey(['zoom', 1, video.v.bvid, video.page, from, to, cells, login.state === 'ok']);
   const hit = readCache(key, cfg.cacheHours);
-  if (hit) return { ...hit, cached: true };
+  if (hit) return { ...hit, cached: true, meta };
   if (overHourly(cfg.maxPerHour * 2)) throw new InputError('这一小时看得太多了，晚点再放大看');
 
   const fetchOptions = {
@@ -323,7 +338,7 @@ export async function lookZoom(args, { cfg = loadConfig(), log = () => {} } = {}
   ].join('\n');
   const pngs = result.sheets.map((s) => s.png);
   writeCache(key, text, pngs);
-  return { text, pngs, cached: false };
+  return { text, pngs, cached: false, meta };
 }
 
 // ── 本机视频文件（给别的插件当库用，不注册成工具）───────────────────────────
@@ -333,7 +348,7 @@ export async function lookZoom(args, { cfg = loadConfig(), log = () => {} } = {}
  * @param {{file:string, title?:string, from?:number, to?:number, detail?:'low'|'med', note?:string}} args
  * @returns {Promise<{text:string, pngs:Buffer[], cached:boolean, duration:number}>}
  */
-export async function lookFile(args, { cfg = loadConfig(), log = () => {} } = {}) {
+async function lookFileImpl(args, { cfg = loadConfig(), log = () => {} } = {}) {
   applyEnv(cfg);
   const file = path.resolve(String(args.file ?? ''));
   if (!fs.existsSync(file)) throw new InputError('视频文件不存在');
@@ -357,7 +372,8 @@ export async function lookFile(args, { cfg = loadConfig(), log = () => {} } = {}
   const stat = fs.statSync(file);
   const key = cacheKey(['file', 1, file, stat.size, stat.mtimeMs, from, to, detail]);
   const hit = readCache(key, cfg.cacheHours);
-  if (hit) return { ...hit, cached: true, duration };
+  const meta = { title: args.title || path.basename(file), duration, from, to, sheets };
+  if (hit) return { ...hit, cached: true, duration, meta };
   if (overHourly(cfg.maxPerHour)) throw new InputError(`这一小时已经看了 ${cfg.maxPerHour} 个视频，晚点再看`);
 
   const result = await exclusive(() => withTimeout(runStoryboard({
@@ -382,7 +398,7 @@ export async function lookFile(args, { cfg = loadConfig(), log = () => {} } = {}
   const text = [head, `${intro}\n${fitCells(result, room, DETAIL_CHARS[detail])}`, partial].filter(Boolean).join('\n\n');
   writeCache(key, text, pngs);
   log(`看了本机视频 ${path.basename(file)}（${fmtDur(duration)}，${sheets} 张图）`);
-  return { text, pngs, cached: false, duration };
+  return { text, pngs, cached: false, duration, meta };
 }
 
 // ── 站内搜索 ──────────────────────────────────────────────────────────────
@@ -411,7 +427,7 @@ export function formatFind(query, { order = 'relevance', duration = 'any', total
  * 在 B站站内搜视频。
  * @param {{query:string, order?:keyof FIND_ORDERS, duration?:keyof FIND_DURATIONS, limit?:number}} args
  */
-export async function find(args, { cfg = loadConfig() } = {}) {
+async function findImpl(args, { cfg = loadConfig() } = {}) {
   const query = String(args.query ?? '').replace(/\s+/g, ' ').trim();
   if (!query) throw new InputError('要给搜索词');
   if (query.length > 50) throw new InputError('搜索词最多 50 个字');
@@ -424,7 +440,39 @@ export async function find(args, { cfg = loadConfig() } = {}) {
   const { client } = makeClient(cfg);
   findRecent.push(now);
   const r = await client.searchVideos(query, { order: FIND_ORDERS[order], duration: FIND_DURATIONS[duration] });
-  return { text: formatFind(query, { order, duration, total: r.total, items: r.items.slice(0, limit) }), pngs: [], cached: false };
+  const items = r.items.slice(0, limit);
+  return {
+    text: formatFind(query, { order, duration, total: r.total, items }),
+    pngs: [],
+    cached: false,
+    items,
+    meta: { title: query, order, results: items.length, total: r.total },
+  };
 }
+
+// ── 对外导出：每次调用记一笔「最近看过」（source：tool 她调用的 / ui 设置页试看 / plugin 别的插件 / cli 命令行）──
+function tracked(kind, impl, describe) {
+  return async (args, opts = {}) => {
+    const t = Date.now();
+    const source = opts.source ?? (kind === 'file' ? 'plugin' : 'other');
+    try {
+      const r = await impl(args, opts);
+      record({ kind, source, ok: true, cached: Boolean(r.cached), ms: Date.now() - t, ...r.meta });
+      return r;
+    } catch (e) {
+      record({ kind, source, ok: false, ms: Date.now() - t, title: clip(describe(args ?? {}), 80), error: clip(e?.message ?? e, 160) });
+      throw e;
+    }
+  };
+}
+
+/** 看一个视频。@returns {Promise<{text:string, pngs:Buffer[], cached:boolean, meta:object}>} */
+export const look = tracked('look', lookImpl, (a) => a.url);
+/** 放大看某几秒。 */
+export const lookZoom = tracked('zoom', lookZoomImpl, (a) => a.url);
+/** 本机视频文件（只给插件代码调用）。 */
+export const lookFile = tracked('file', lookFileImpl, (a) => a.title || path.basename(String(a.file ?? '')));
+/** 站内搜索。 */
+export const find = tracked('find', findImpl, (a) => a.query);
 
 export { InputError };

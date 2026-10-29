@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B站看视频 · 预览</title>
+<style>
+  /* 模拟 DSH 的主题变量（浅色 / 深色），真实环境里由 DSH 提供 */
+  :root { --dsw-alias-label-primary:#1f2328; --dsw-alias-label-secondary:#59636e; --dsw-alias-label-tertiary:#8b949e;
+    --dsw-alias-bg-layer-1:#ffffff; --dsw-alias-bg-layer-2:#f6f8fa; --dsw-alias-border-l2:#e3e6ea; --dsw-alias-brand-primary:#4d6bfe;
+    --dsw-alias-state-success-primary:#1a7f37; --dsw-alias-state-danger:#d1242f; --page:#f3f4f6; }
+  :root[data-theme=dark] { --dsw-alias-label-primary:#e6e8eb; --dsw-alias-label-secondary:#a4abb4; --dsw-alias-label-tertiary:#737b86;
+    --dsw-alias-bg-layer-1:#1d1f23; --dsw-alias-bg-layer-2:#25282d; --dsw-alias-border-l2:#33373d; --dsw-alias-brand-primary:#7a8fff;
+    --dsw-alias-state-success-primary:#3fb950; --dsw-alias-state-danger:#f85149; --page:#141518; }
+  body { margin:0; background:var(--page); font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
+  .shell { display:grid; grid-template-columns:200px 1fr; min-height:100vh; }
+  .side { border-right:1px solid var(--dsw-alias-border-l2); padding:16px; color:var(--dsw-alias-label-secondary); font-size:13px; }
+  .side div { padding:6px 10px; border-radius:8px; }
+  .side .on { background:var(--dsw-alias-bg-layer-2); color:var(--dsw-alias-label-primary); font-weight:600; }
+  main { padding:24px 32px; }
+  .theme { position:fixed; right:12px; top:10px; font-size:12px; }
+  @media (max-width:700px) { .shell { grid-template-columns:1fr } .side { display:none } main { padding:16px } }
+</style>
+</head>
+<body>
+<button class="theme" onclick="document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'">切换深浅色</button>
+<div class="shell">
+  <nav class="side"><div>通用</div><div>模型</div><div>鲸鱼日常</div><div class="on">B站看视频</div><div>插件</div></nav>
+  <main id="root"></main>
+</div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"></script>
+<script>
+  // DSH 模块加载器的桩：把 factory 物化，再模拟设置页的 slot 注册
+  window.__ModuleLoader__ = {
+    load({ factory }) {
+      const mod = factory((name) => {
+        if (name === 'react') return window.React;
+        if (name === '@deepseek-ai/dsh-client-ui-primitives') throw new Error('预览里没有 DSH 基础组件，用原生按钮代替');
+        throw new Error(`预览里没有模块 ${name}`);
+      });
+      mod.apply({ slots: {
+        inject: (_n, fn) => fn(),
+        register: (def, Comp) => ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(Comp, def.inject())),
+      } });
+    },
+  };
+</script>
+<script src="/client.js"></script>
+</body>
+</html>

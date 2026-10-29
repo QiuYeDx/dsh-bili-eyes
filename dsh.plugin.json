@@ -1,6 +1,12 @@
 {
   "name": "dsh-bili-eyes",
-  "description": "让模型看 B站视频：分镜图 + 台词 + 热评 + 弹幕热词（只读）",
-  "version": "0.3.0",
-  "entry": { "name": "dsh-bili-eyes", "inject": ["tools", "attachments"] }
+  "description": "让模型看 B站视频：分镜图 + 台词 + 热评 + 弹幕热词，站内搜视频（只读；含设置页）",
+  "version": "0.4.0",
+  "entry": {
+    "name": "dsh-bili-eyes",
+    "inject": [
+      "tools",
+      "attachments"
+    ]
+  }
 }

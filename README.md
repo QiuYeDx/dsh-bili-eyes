@@ -49,6 +49,8 @@ cd dsh-bili-eyes && npm ci
 
 ### 可选：登录 B站（建议用小号）
 
+最简单的是在 DSH 设置页「B站看视频 → 概览」里点「扫码登录」。也可以用命令行：
+
 ```bash
 node bin/cli.mjs login     # 弹出二维码，用 B站 App 扫码确认
 node bin/cli.mjs status
@@ -60,9 +62,21 @@ node bin/cli.mjs status
 
 没有字幕时，分镜会调用 `~/.dsh/asr.json` 里配置的 OpenAI 兼容 `/audio/transcriptions` 接口（dsh-video-storyboard 的约定）。可以用本机 SenseVoice / FunASR / whisper 服务，也可以用硅基流动。写了 `manage.start` 时，用到才拉起本机服务、闲置后自动关闭。没配也能用，只是没有台词。
 
+## 设置页
+
+DSH「设置」侧边栏里多出「B站看视频」（0.4.0 起），三个页签：
+
+- **概览**：B站登录（页面里扫码 / 换账号 / 退出）、这一小时的用量、缓存占用与清理、状态检查（工具注册、yt-dlp、ffmpeg、登录、语音识别）、最近看过和搜过的记录（谁触发的、用时、是否命中缓存、失败原因）
+- **试看**：贴一个链接或关键词，跑一遍和工具调用完全相同的流程，直接看到模型拿到的分镜图和文字素材
+- **设置**：下面所有配置项，带范围校验；路径可以一键检查（目录能否写入、yt-dlp / ffmpeg 版本）。保存后立即生效，不用重启 DSH
+
+页面数据走 DSH 自带 webServer 上的同源接口 `/api/bili-eyes`，登录 cookies 不会经过接口返回。宿主没有 webServer 时只注册工具，不挂设置页。本地调界面可以不开 DSH：`npm run preview` → http://127.0.0.1:3396（用的是同一套接口和真实配置）。
+
+最近的记录存在 `~/.dsh/bili-eyes/history.jsonl`（只记标题、BV 号、用时，最多约 300 条）。
+
 ## 配置
 
-`~/.dsh/bili-eyes.json`（都可省略）：
+`~/.dsh/bili-eyes.json`（都可省略；设置页改的也是这个文件，只写和默认值不同的项）：
 
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |

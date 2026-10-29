@@ -1,0 +1,257 @@
+// 设置页用的本地接口（挂在 DSH 的 webServer 上，同源；开发预览服务器也复用这个 handler）。
+//   GET  /api/bili-eyes?view=overview|config
+//   POST /api/bili-eyes {action, ...}   保存配置、扫码登录、清缓存、试看…
+// 只接受同源请求，请求体 ≤ 16 KB。登录信息（cookies）永远不经过这个接口返回。
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFile, spawn } from 'node:child_process';
+import QRCode from 'qrcode';
+import { BiliClient } from './bili-api.js';
+import { loadConfig, saveConfig, DEFAULTS, FIELDS, CONFIG_FILE, DATA_DIR, DSH_HOME } from './config.js';
+import { loadCredential, saveCredential, removeCredential, qrGenerate, qrPoll } from './credential.js';
+import { readHistory, clearHistory } from './history.js';
+import { look, lookZoom, find, usage, resetLoginCache, InputError } from './look.js';
+import { BiliError } from './bili-api.js';
+
+export const API_ROUTE = '/api/bili-eyes';
+export const TOOL_NAMES = ['bili_look', 'bili_look_zoom', 'bili_find'];
+const RESULT_CACHE = path.join(DATA_DIR, 'cache');
+const PKG = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+
+export function sameOrigin(req) {
+  if (req.headers['sec-fetch-site'] === 'cross-site') return false;
+  const origin = req.headers.origin;
+  if (typeof origin !== 'string' || origin === '' || origin === 'null') return true;
+  const host = req.headers.host;
+  if (typeof host !== 'string' || host === '') return false;
+  try { return new URL(origin).host === host; } catch { return false; }
+}
+
+function json(res, status, body) {
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+  res.end(JSON.stringify(body));
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = []; let size = 0;
+    req.on('data', (c) => { size += c.length; if (size > 16384) { reject(new Error('请求太大')); req.destroy(); return; } chunks.push(c); });
+    req.on('end', () => { try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); } catch { reject(new Error('请求不是 JSON')); } });
+    req.on('error', reject);
+  });
+}
+
+// ── 小工具 ────────────────────────────────────────────────────────────────
+/** 目录总大小（最多数 20000 个文件，够用且不会卡住）。 */
+export function dirStats(dir) {
+  let bytes = 0; let files = 0;
+  const walk = (d) => {
+    let list;
+    try { list = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of list) {
+      if (files >= 20000) return;
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else { try { bytes += fs.statSync(p).size; files += 1; } catch { /* 忽略 */ } }
+    }
+  };
+  if (dir && fs.existsSync(dir)) walk(dir);
+  return { dir, bytes, files };
+}
+
+/** 清理目录内容：只清这几个插件自己的目录，而且拒绝盘符根目录这类过短的路径。 */
+export function clearDir(dir) {
+  const abs = path.resolve(dir);
+  if (abs.split(/[\\/]/).filter(Boolean).length < 2) throw new Error(`路径太短，不清理：${abs}`);
+  const before = dirStats(abs);
+  if (fs.existsSync(abs)) for (const e of fs.readdirSync(abs)) fs.rmSync(path.join(abs, e), { recursive: true, force: true });
+  return before;
+}
+
+function checkWritableDir(dir) {
+  try {
+    if (typeof dir !== 'string' || !path.isAbsolute(dir)) return { ok: false, error: '要是绝对路径' };
+    const existed = fs.existsSync(dir);
+    fs.mkdirSync(dir, { recursive: true });
+    const probe = path.join(dir, `.write-test-${process.pid}`);
+    fs.writeFileSync(probe, 'ok');
+    fs.rmSync(probe, { force: true });
+    return { ok: true, existed };
+  } catch (e) {
+    return { ok: false, error: e.code === 'EACCES' || e.code === 'EPERM' ? '没有写入权限' : e.message };
+  }
+}
+
+/** 跑一下 yt-dlp / ffmpeg 看版本。只允许文件名是 yt-dlp / ffmpeg 的程序。 */
+export function toolVersion(kind, file) {
+  const name = kind === 'ytdlp' ? 'yt-dlp' : 'ffmpeg';
+  const exe = file || name;
+  if (file && !new RegExp(`^${name}(\\.exe)?$`, 'i').test(path.basename(file))) return Promise.resolve({ ok: false, error: `不是 ${name}` });
+  return new Promise((resolve) => {
+    execFile(exe, [kind === 'ytdlp' ? '--version' : '-version'], { timeout: 10_000, windowsHide: true }, (err, stdout) => {
+      if (err) return resolve({ ok: false, error: err.code === 'ENOENT' ? (file ? '文件不存在' : '在 PATH 上找不到') : String(err.message).slice(0, 120) });
+      const first = String(stdout).split('\n')[0].trim();
+      resolve({ ok: true, version: kind === 'ytdlp' ? first : (first.match(/version (\S+)/)?.[1] ?? first) });
+    });
+  });
+}
+
+function asrInfo() {
+  const file = path.join(DSH_HOME, 'asr.json');
+  try {
+    const c = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
+    return { ok: Boolean(c.baseUrl), file, baseUrl: c.baseUrl ?? '', model: c.model ?? '', managed: Array.isArray(c.manage?.start) };
+  } catch { return { ok: false, file }; }
+}
+
+// 登录状态：查一次 B站接口，缓存 60 秒
+let loginCache = { at: 0, value: null };
+async function loginInfo(force = false) {
+  if (!force && loginCache.value && Date.now() - loginCache.at < 60_000) return loginCache.value;
+  const cred = loadCredential();
+  let value;
+  if (!cred) value = { state: 'none' };
+  else {
+    try {
+      const nav = await new BiliClient({ cookies: cred.cookies }).nav();
+      value = nav.isLogin
+        ? { state: 'ok', uname: nav.uname ?? cred.uname ?? '', mid: nav.mid ?? cred.mid ?? 0, vip: Boolean(nav.vipStatus), savedAt: cred.savedAt ?? '' }
+        : { state: 'expired', uname: cred.uname ?? '', savedAt: cred.savedAt ?? '' };
+    } catch (e) {
+      value = { state: 'unknown', uname: cred.uname ?? '', savedAt: cred.savedAt ?? '', error: String(e.message).slice(0, 120) };
+    }
+  }
+  loginCache = { at: Date.now(), value };
+  return value;
+}
+
+// 扫码登录：二维码的 key 只留在服务端，界面只拿到图片
+let pendingLogin = null;
+
+const dataUrl = (buf) => `data:image/png;base64,${Buffer.from(buf).toString('base64')}`;
+
+// ── 视图 ──────────────────────────────────────────────────────────────────
+async function getView(view, ctx) {
+  const cfg = loadConfig();
+  if (view === 'overview') {
+    const [login, ytdlp, ffmpeg] = await Promise.all([loginInfo(), toolVersion('ytdlp', cfg.ytdlpPath), toolVersion('ffmpeg', cfg.ffmpegPath)]);
+    const asr = asrInfo();
+    const registered = ctx.registered();
+    const loginText = { ok: `B站已登录：${login.uname}`, expired: 'B站登录已过期', unknown: '暂时查不到 B站登录状态', none: 'B站没登录' }[login.state];
+    return {
+      version: PKG.version,
+      login,
+      usage: usage(cfg),
+      cache: {
+        results: dirStats(RESULT_CACHE),
+        storyboard: cfg.cacheDir ? dirStats(cfg.cacheDir) : { dir: '', bytes: 0, files: 0 },
+        media: cfg.mediaDir ? dirStats(cfg.mediaDir) : { dir: '', bytes: 0, files: 0 },
+        mediaMaxMb: cfg.mediaMaxMb,
+        cacheHours: cfg.cacheHours,
+      },
+      checks: [
+        { id: 'tools', ok: registered, label: registered ? `${TOOL_NAMES.length} 个工具已注册：${TOOL_NAMES.join('、')}` : '工具没注册', hint: registered ? '' : (ctx.registerError?.() || '在 DSH 里启用 dsh-bili-eyes 后彻底重启 DSH') },
+        { id: 'ytdlp', ok: ytdlp.ok, label: ytdlp.ok ? `yt-dlp ${ytdlp.version}` : `yt-dlp 不可用：${ytdlp.error}`, hint: ytdlp.ok ? '' : '装 yt-dlp（winget install yt-dlp.yt-dlp），或在「设置 → 路径」里指定' },
+        { id: 'ffmpeg', ok: ffmpeg.ok, label: ffmpeg.ok ? `ffmpeg ${ffmpeg.version}` : `ffmpeg 不可用：${ffmpeg.error}`, hint: ffmpeg.ok ? '' : '装 ffmpeg，或在「设置 → 路径」里指定' },
+        { id: 'login', ok: login.state === 'ok', optional: true, label: loginText, hint: login.state === 'ok' ? '' : '可选：登录后才有 AI 字幕、AI 总结和 1080P 放大' },
+        { id: 'asr', ok: asr.ok, optional: true, label: asr.ok ? `语音识别：${asr.baseUrl}${asr.model ? `（${asr.model}）` : ''}${asr.managed ? '，用到时自动拉起' : ''}` : '没配置语音识别', hint: asr.ok ? '' : `可选：没有字幕的视频就没有台词。配置文件 ${asr.file}` },
+      ],
+      history: readHistory(40),
+      configFile: CONFIG_FILE,
+    };
+  }
+  if (view === 'config') return { config: cfg, defaults: DEFAULTS, fields: FIELDS, configFile: CONFIG_FILE };
+  throw new Error(`不认识的 view：${view}`);
+}
+
+const CACHE_DIRS = {
+  results: () => RESULT_CACHE,
+  storyboard: (cfg) => cfg.cacheDir,
+  media: (cfg) => cfg.mediaDir,
+};
+
+async function postAction(body) {
+  const cfg = loadConfig();
+  switch (body.action) {
+    case 'saveConfig': return { config: saveConfig(body.config ?? {}) };
+    case 'resetConfig': {
+      const group = body.group;
+      const keys = FIELDS.filter((f) => f.group === group).map((f) => f.key);
+      if (!keys.length) throw new Error('不认识的分组');
+      return { config: saveConfig(Object.fromEntries(keys.map((k) => [k, DEFAULTS[k]]))) };
+    }
+    case 'checkPath': return checkWritableDir(String(body.path ?? '').trim());
+    case 'checkTool': return toolVersion(body.kind === 'ytdlp' ? 'ytdlp' : 'ffmpeg', String(body.path ?? '').trim());
+    case 'refreshLogin': return { login: await loginInfo(true) };
+    case 'loginStart': {
+      const { url, key } = await qrGenerate();
+      pendingLogin = { key, at: Date.now() };
+      return { qr: await QRCode.toDataURL(url, { width: 240, margin: 1 }) };
+    }
+    case 'loginPoll': {
+      if (!pendingLogin) return { state: 'expired' };
+      if (Date.now() - pendingLogin.at > 175_000) { pendingLogin = null; return { state: 'expired' }; }
+      const r = await qrPoll(pendingLogin.key);
+      if (r.state === 'expired') pendingLogin = null;
+      if (r.state !== 'ok') return { state: r.state };
+      pendingLogin = null;
+      const nav = await new BiliClient({ cookies: r.cookies }).nav().catch(() => ({}));
+      saveCredential({ cookies: r.cookies, refreshToken: r.refreshToken, uname: nav.uname ?? '', mid: nav.mid ?? 0, savedAt: new Date().toISOString() });
+      resetLoginCache();
+      return { state: 'ok', login: await loginInfo(true) };
+    }
+    case 'logout':
+      removeCredential();
+      resetLoginCache();
+      return { login: await loginInfo(true) };
+    case 'clearCache': {
+      const dir = CACHE_DIRS[body.which]?.(cfg);
+      if (!dir) throw new Error(body.which in CACHE_DIRS ? '这个目录用的是默认位置，这里不清理' : '不认识的缓存');
+      return { cleared: clearDir(dir) };
+    }
+    case 'clearHistory': clearHistory(); return {};
+    case 'openFolder': {
+      const dir = body.which === 'data' ? DATA_DIR : CACHE_DIRS[body.which]?.(cfg);
+      if (!dir) throw new Error('这个目录用的是默认位置');
+      fs.mkdirSync(dir, { recursive: true });
+      if (process.platform === 'win32') spawn('explorer.exe', [path.normalize(dir)], { detached: true, stdio: 'ignore' }).unref();
+      else spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [dir], { detached: true, stdio: 'ignore' }).unref();
+      return { opened: dir };
+    }
+    case 'try': {
+      const t = Date.now();
+      try {
+        let r;
+        if (body.mode === 'find') r = await find({ query: body.query, order: body.order, duration: body.duration, limit: body.limit }, { source: 'ui' });
+        else if (body.mode === 'zoom') r = await lookZoom({ url: body.url, from: Number(body.from), to: Number(body.to), cells: body.cells ? Number(body.cells) : undefined }, { source: 'ui' });
+        else {
+          const args = { url: body.url, detail: body.detail === 'low' ? 'low' : 'med' };
+          if (body.from !== '' && body.from != null) args.from = Number(body.from);
+          if (body.to !== '' && body.to != null) args.to = Number(body.to);
+          r = await look(args, { source: 'ui' });
+        }
+        return { text: r.text, images: r.pngs.map(dataUrl), cached: Boolean(r.cached), ms: Date.now() - t, meta: r.meta ?? null, items: r.items ?? null };
+      } catch (e) {
+        if (e instanceof InputError || e instanceof BiliError) throw new Error(e.message);
+        throw e;
+      }
+    }
+    default: throw new Error(`不认识的操作：${body.action}`);
+  }
+}
+
+/** 主接口。ctx.registered(): 工具是否已注册（DSH 里由插件提供，预览服务器里模拟）。 */
+export function makeApiHandler(ctx = { registered: () => true }) {
+  return async function handler(req, res) {
+    if (!sameOrigin(req)) return json(res, 403, { ok: false, error: '只接受本机 DSH 页面的请求' });
+    const url = new URL(req.url, 'http://local');
+    try {
+      if (req.method === 'GET') return json(res, 200, { ok: true, ...await getView(url.searchParams.get('view') || 'overview', ctx) });
+      if (req.method === 'POST') return json(res, 200, { ok: true, ...await postAction(await readBody(req)) });
+      return json(res, 405, { ok: false, error: '只支持 GET / POST' });
+    } catch (e) {
+      return json(res, 400, { ok: false, error: e.message, errors: e.errors });
+    }
+  };
+}
+
