@@ -155,13 +155,22 @@ test('写接口：评论、楼中楼、@、点赞、私信、动态的请求格�
   await client.addComment({ oid: 100, type: 1, message: '@主人号 hi', root: '5', parent: '6', atNameToMid: { 主人号: 42 } });
   let r = reqs.at(-1);
   assert.equal(r.method, 'POST');
-  assert.match(r.url, /x\/v2\/reply\/add$/);
+  assert.match(r.url, /x\/v2\/reply\/add\?/);
+  const query = new URL(r.url).searchParams;
+  assert.equal(query.get('web_location'), '1550101');
+  assert.match(query.get('w_rid'), /^[0-9a-f]{32}$/);
+  assert.equal(query.get('dm_img_list'), '[]');
+  assert.match(query.get('dm_img_str'), /^[A-K]{2}$/);
+  assert.match(query.get('dm_img_inter'), /"wh":\[0,0,0\]/);
   const form = new URLSearchParams(r.body);
   assert.equal(form.get('csrf'), 'CSRF');
+  assert.equal(form.get('csrf_token'), 'CSRF');
   assert.equal(form.get('root'), '5');
   assert.equal(form.get('parent'), '6');
   assert.deepEqual(JSON.parse(form.get('at_name_to_mid')), { 主人号: 42 });
   assert.equal(r.headers.origin, 'https://www.bilibili.com');
+  // 末尾不能带斜杠：带了 B站会把评论设成仅自己可见
+  assert.equal(r.headers.referer, 'https://www.bilibili.com');
   await client.addComment({ oid: 100, message: 'top' });
   assert.equal(new URLSearchParams(reqs.at(-1).body).get('root'), null, '顶层评论不带 root');
   await client.likeVideo(9);
@@ -264,7 +273,7 @@ setVerifyDelay(0);
 
 test('仅自己可见：照实说、记成 hidden、算额度、暂停写操作', async () => {
   const f = files();
-  const client = { ...fakeClient(), addComment: async () => ({ rpid: 7, rpid_str: '7', reply: { state: 17 } }) };
+  const client = { ...fakeClient(), commentState: async () => 17 };
   const cfg = cfgOf({ commentMode: 'auto' });
   const r = await request(commentReq('50'), { cfg, client, ...f });
   assert.equal(r.status, 'hidden');
@@ -285,6 +294,23 @@ test('返回里没带状态时自己查一次：公开就说已确认，查不�
   assert.match((await request(commentReq('61'), { cfg: cfgOf({ commentMode: 'auto' }), client: unknown, ...f2 })).text, /没能确认/);
 });
 
+test('接口返回的 reply.state 是乐观值：它说 0 也要自己查，查到 17 就算 hidden', async () => {
+  const f = files();
+  const client = { ...fakeClient(), addComment: async () => ({ rpid: 7, rpid_str: '7', reply: { state: 0 } }), commentState: async () => 17 };
+  const r = await request(commentReq('62'), { cfg: cfgOf({ commentMode: 'auto' }), client, ...f });
+  assert.equal(r.status, 'hidden');
+  assert.match(r.text, /仅自己可见/);
+});
+
+test('刚发出去还在审核：查几次，变公开了就算成功', async () => {
+  const f = files();
+  const seq = [17, 17, 0];
+  const client = { ...fakeClient(), commentState: async () => seq.shift() };
+  const r = await request(commentReq('63'), { cfg: cfgOf({ commentMode: 'auto' }), client, ...f });
+  assert.equal(r.status, 'sent');
+  assert.match(r.text, /已确认公开/);
+});
+
 test('楼中楼查可见性时带上它所在的楼', async () => {
   const f = files(); let asked = null;
   const client = { ...fakeClient(), commentState: async (q) => { asked = q; return 17; } };
@@ -295,7 +321,9 @@ test('楼中楼查可见性时带上它所在的楼', async () => {
 
 test('再查一次：变公开的记成 visible，删过的不查', async () => {
   const f = files();
-  const client = { ...fakeClient(), addComment: async () => ({ rpid_str: '8', reply: { state: 17 } }), commentState: async () => 0 };
+  let calls = 0;
+  // 第一次发完查 3 次都是 17 → 记成 hidden；之后再查变成 0 → visible
+  const client = { ...fakeClient(), commentState: async () => (++calls <= 3 ? 17 : 0) };
   await request(commentReq('80'), { cfg: cfgOf({ commentMode: 'auto' }), client, ...f });
   const r = await recheckHidden({ client, auditFile: f.auditFile });
   assert.deepEqual(r, { checked: 1, nowVisible: 1 });

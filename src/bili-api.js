@@ -25,6 +25,27 @@ export function wbiSign(params, mixinKey, now = Math.floor(Date.now() / 1000)) {
   return `${query}&w_rid=${crypto.createHash('md5').update(query + mixinKey).digest('hex')}`;
 }
 
+/**
+ * 网页端每次请求都会带的「鼠标 / 键盘操作」参数（B站内部叫 dm，风控用）。
+ * 取值和 bilibili-api-python 的 _enc_dm 一致（空的操作记录 + 两个随机字母）；
+ * 发评论时一起带上，尽量和网页端一致。
+ */
+export function dmParams(random = Math.random) {
+  const pool = 'ABCDEFGHIJK';
+  const pick = () => {
+    const i = Math.floor(random() * pool.length);
+    let j = Math.floor(random() * pool.length);
+    if (j === i) j = (j + 1) % pool.length;
+    return pool[i] + pool[j];
+  };
+  return {
+    dm_img_list: '[]',
+    dm_img_str: pick(),
+    dm_cover_img_str: pick(),
+    dm_img_inter: '{"ds":[],"wh":[0,0,0],"of":[0,0,0]}',
+  };
+}
+
 const ENTITY = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&apos;': "'" };
 const stripHtml = (s) => String(s ?? '')
   .replace(/<[^>]+>/g, '')
@@ -126,7 +147,10 @@ export class BiliClient {
       const wait = this.lastAt + this.minIntervalMs - Date.now();
       if (wait > 0) await new Promise((r) => setTimeout(r, wait));
       this.lastAt = Date.now();
-      const headers = { 'user-agent': UA, referer: 'https://www.bilibili.com/', cookie: this.cookieHeader() };
+      // Referer 不能带末尾的斜杠：B站风控按字符串核对来源，`https://www.bilibili.com/`
+      // 会被当成伪造来源，评论接口照样返回成功，但评论被设成「仅自己可见」（state 17）。
+      // 只读接口带不带都能用，写操作（评论/回复）必须是不带斜杠的形式。
+      const headers = { 'user-agent': UA, referer: 'https://www.bilibili.com', cookie: this.cookieHeader() };
       if (method !== 'GET') headers.origin = 'https://www.bilibili.com';
       let body;
       if (form) { headers['content-type'] = 'application/x-www-form-urlencoded'; body = new URLSearchParams(form).toString(); }
@@ -177,6 +201,17 @@ export class BiliClient {
 
   async signed(base, params) {
     return this.request(`${base}?${wbiSign(params, await this.mixinKey())}`);
+  }
+
+  /**
+   * 带 WBI 签名的 POST：签名参数（含 dm 反爬参数、web_location）走查询串，正文仍是表单。
+   * 和网页端 / bilibili-api-python 的 comment.send 一致。拿不到 WBI 密钥时退回不签名——
+   * 评论接口不强制 w_rid，别因为 nav 挂了就连评论都发不出去。
+   */
+  async signedPost(base, form, params = {}) {
+    let q = '';
+    try { q = wbiSign({ ...dmParams(), web_location: 1550101, ...params }, await this.mixinKey()); } catch { /* 退回不签名 */ }
+    return this.request(q ? `${base}?${q}` : base, { method: 'POST', form });
   }
 
   view({ bvid, aid }) {
@@ -349,10 +384,10 @@ export class BiliClient {
   /** 发评论；给 root（和 parent）就是楼中楼。atNameToMid: {昵称: mid}，让正文里的「@昵称」变成真的 @。 */
   addComment({ oid, type = 1, message, root = 0, parent = 0, atNameToMid = null }) {
     // 和网页端发评论时带的字段一致（少了这些更像脚本）
-    const form = { oid, type, message, plat: 1, ordering: 'heat', jsonp: 'jsonp', gaia_source: 'main_web', statistics: JSON.stringify({ appId: 100, platform: 5 }), csrf: this.csrf() };
+    const form = { oid, type, message, plat: 1, ordering: 'heat', jsonp: 'jsonp', gaia_source: 'main_web', statistics: JSON.stringify({ appId: 100, platform: 5 }), csrf: this.csrf(), csrf_token: this.csrf() };
     if (root && String(root) !== '0') { form.root = root; form.parent = parent && String(parent) !== '0' ? parent : root; }
     if (atNameToMid && Object.keys(atNameToMid).length) form.at_name_to_mid = JSON.stringify(atNameToMid);
-    return this.request('https://api.bilibili.com/x/v2/reply/add', { method: 'POST', form });
+    return this.signedPost('https://api.bilibili.com/x/v2/reply/add', form);
   }
 
   /**

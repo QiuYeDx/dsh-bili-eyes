@@ -1,7 +1,7 @@
 {
   "name": "dsh-bili-eyes",
   "description": "让模型看 B站视频、搜视频、逛 B站、看收件箱；点赞评论私信动态默认关闭，可按档位开启（含设置页）",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "entry": {
     "name": "dsh-bili-eyes",
     "inject": [

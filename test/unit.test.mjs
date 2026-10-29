@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseInput, resolveShort, canonicalUrl, InputError } from '../src/url.js';
-import { wbiMixinKey, wbiSign } from '../src/bili-api.js';
+import { wbiMixinKey, wbiSign, dmParams } from '../src/bili-api.js';
 import { parseDanmaku, danmakuStats, normalizeDanmaku } from '../src/danmaku.js';
 import { compactCells, cellsFor, fitCells, isAd, sheetsFor, timeoutFor, formatFind, find, FIND_NOTE } from '../src/look.js';
 import { parseSearchItem, parseClock } from '../src/bili-api.js';
@@ -54,6 +54,21 @@ test('WBI 签名（bilibili-API-collect 文档里的例子）', () => {
   const mixin = wbiMixinKey('https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png', 'https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png');
   assert.equal(mixin, 'ea1db124af3c7062474693fa704f4ff8');
   assert.equal(wbiSign({ foo: '114', bar: '514', zab: 1919810 }, mixin, 1702204169), 'bar=514&foo=114&wts=1702204169&zab=1919810&w_rid=8f6f2b5b3d485fe1886cec6a0be8c5d4');
+});
+
+test('评论的 dm 反爬参数（和 bilibili-api-python 的 _enc_dm 形状一致）', () => {
+  assert.deepEqual(dmParams(() => 0), {
+    dm_img_list: '[]',
+    dm_img_str: 'AB',
+    dm_cover_img_str: 'AB',
+    dm_img_inter: '{"ds":[],"wh":[0,0,0],"of":[0,0,0]}',
+  });
+  const rnd = dmParams();
+  assert.match(rnd.dm_img_str, /^[A-K]{2}$/);
+  assert.match(rnd.dm_cover_img_str, /^[A-K]{2}$/);
+  const q = new URLSearchParams(wbiSign({ ...rnd, web_location: 1550101 }, 'x'.repeat(32), 1700000000));
+  assert.equal(q.get('web_location'), '1550101');
+  assert.match(q.get('w_rid'), /^[0-9a-f]{32}$/);
 });
 
 test('弹幕统计', () => {

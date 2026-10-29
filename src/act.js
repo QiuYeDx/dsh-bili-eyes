@@ -137,6 +137,21 @@ let verifyDelayMs = 2000;
 /** 测试用：发评论后隔多久查可见性。 */
 export function setVerifyDelay(ms) { verifyDelayMs = ms; }
 
+/**
+ * 发完之后用自己的视角查这条评论的状态，查几次（刚发出去可能还在审核）。
+ * 0 = 别人看得到；17 = 仅自己可见；null = 查不到。
+ */
+async function verifyCommentState(client, { oid, type, rpid, root }) {
+  if (!rpid || !client.commentState) return null;
+  let state = null;
+  for (let i = 0; i < 3; i += 1) {
+    if (i > 0) await sleep(verifyDelayMs * i);   // 2s → 再等 2s → 再等 4s
+    try { state = await client.commentState({ oid, type, rpid, root }); } catch { state = null; }
+    if (state != null && Number(state) === 0) return 0;
+  }
+  return state == null ? null : Number(state);
+}
+
 /** 真正发请求。返回 {rpid?, info, state?, hidden?}。 */
 async function perform(client, d) {
   const p = d.payload;
@@ -149,14 +164,9 @@ async function perform(client, d) {
   if (d.kind === 'comment' || d.kind === 'reply') {
     const r = await client.addComment({ oid: p.oid, type: p.type, message: p.text, root: p.root, parent: p.parent, atNameToMid: p.atNameToMid });
     const rpid = String(r?.rpid_str ?? r?.rpid ?? '');
-    // B站接受了不等于别人看得到：新号、像脚本的请求常被设成「仅自己可见」（state 17），接口照样返回成功。
-    // 先看返回里带没带状态，没带就隔两秒用自己的视角查一次。
-    let state = r?.reply?.state;
-    if (state == null && rpid && client.commentState) {
-      await sleep(verifyDelayMs);
-      try { state = await client.commentState({ oid: p.oid, type: p.type, rpid, root: d.kind === 'reply' ? p.root : 0 }); } catch { state = null; }
-    }
-    state = state == null ? null : Number(state);
+    // B站接受了不等于别人看得到：发评论接口返回的 reply.state 是 0（乐观值），实际可能被设成
+    // 「仅自己可见」（state 17，风控或审核中），接口照样返回成功。只能发完用自己的视角再查一遍。
+    const state = await verifyCommentState(client, { oid: p.oid, type: p.type, rpid, root: d.kind === 'reply' ? p.root : 0 });
     return { rpid, state, hidden: state != null && state !== 0, info: state === 0 ? '已发出（已确认公开）' : '已发出' };
   }
   if (d.kind === 'dm') { await client.sendDm({ receiverMid: p.to, text: p.text }); return { info: '已发出' }; }
