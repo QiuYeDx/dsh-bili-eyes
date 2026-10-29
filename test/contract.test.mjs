@@ -8,9 +8,9 @@ import { toolSpecs } from '../src/index.js';
 const hostPath = process.env.DSH_TOOLS_PATH;
 const host = hostPath && existsSync(hostPath) ? await import(pathToFileURL(hostPath).href) : null;
 
-test('宿主 defineTool 接受 bili_look / bili_look_zoom', { skip: !host && '没有设置 DSH_TOOLS_PATH' }, () => {
+test('宿主 defineTool 接受 bili_look / bili_look_zoom / bili_find', { skip: !host && '没有设置 DSH_TOOLS_PATH' }, () => {
   const specs = toolSpecs();
-  for (const spec of [specs.look, specs.zoom]) {
+  for (const spec of [specs.look, specs.zoom, specs.find]) {
     const tool = host.defineTool({ ...spec, execute: async () => ({ text: '', images: [] }) });
     assert.equal(tool.name, spec.name);
     assert.equal(tool.parameters.type, 'object');

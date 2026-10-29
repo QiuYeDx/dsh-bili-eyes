@@ -5,6 +5,7 @@
 //   logout           删除登录信息
 //   look <链接> [--from 秒] [--to 秒] [--out 目录]   不经过 DSH 跑一次，分镜图存成 PNG
 //   zoom <链接> --from 秒 --to 秒 [--cells n] [--out 目录]
+//   find <关键词> [--order relevance|views|newest|danmaku|favorites] [--duration any|short|medium|long|xlong] [--limit n]
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -86,7 +87,12 @@ try {
   else if (cmd === 'status') await status();
   else if (cmd === 'logout') { removeCredential(); console.log('已删除登录信息'); }
   else if (cmd === 'look' || cmd === 'zoom') await runLook(cmd);
-  else { console.log('用法：dsh-bili-eyes login | status [--json] | logout | look <链接> [--from s --to s --detail low|med --out dir] | zoom <链接> --from s --to s [--cells n]'); process.exitCode = 1; }
+  else if (cmd === 'find') {
+    const { find } = await import('../src/look.js');
+    const r = await find({ query: positional.join(' '), order: opt('order'), duration: opt('duration'), limit: opt('limit') ? Number(opt('limit')) : undefined });
+    console.log(r.text);
+  }
+  else { console.log('用法：dsh-bili-eyes login | status [--json] | logout | look <链接> [--from s --to s --detail low|med --out dir] | zoom <链接> --from s --to s [--cells n] | find <关键词> [--order views] [--duration short] [--limit n]'); process.exitCode = 1; }
 } catch (e) {
   console.error(`出错：${e.message}`);
   process.exitCode = 1;

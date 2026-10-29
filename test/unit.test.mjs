@@ -3,7 +3,23 @@ import assert from 'node:assert/strict';
 import { parseInput, resolveShort, canonicalUrl, InputError } from '../src/url.js';
 import { wbiMixinKey, wbiSign } from '../src/bili-api.js';
 import { parseDanmaku, danmakuStats, normalizeDanmaku } from '../src/danmaku.js';
-import { compactCells, cellsFor, fitCells, isAd, sheetsFor, timeoutFor } from '../src/look.js';
+import { compactCells, cellsFor, fitCells, isAd, sheetsFor, timeoutFor, formatFind, find, FIND_NOTE } from '../src/look.js';
+import { parseSearchItem, parseClock } from '../src/bili-api.js';
+
+test('搜索结果解析与清单', async () => {
+  assert.deepEqual([parseClock('12:34'), parseClock('1:02:03'), parseClock('0:5'), parseClock('--')], [754, 3723, 5, 0]);
+  const item = parseSearchItem({ bvid: 'BV1Hgx76SEqb', title: '比超便宜更便宜的<em class="keyword">dsh</em>看视频插件！&amp;', author: '苍穹晓雷', duration: '1:43', play: 30000, video_review: 8, pubdate: 1793145600, description: '一行\n简介' });
+  assert.deepEqual(item, { bvid: 'BV1Hgx76SEqb', title: '比超便宜更便宜的dsh看视频插件！&', author: '苍穹晓雷', seconds: 103, play: 30000, danmaku: 8, pubdate: 1793145600, desc: '一行 简介' });
+  const text = formatFind('dsh 插件', { order: 'views', duration: 'short', total: 1234, items: [item] });
+  assert.ok(text.startsWith(FIND_NOTE));
+  assert.match(text, /最多播放，10 分钟以内，共约 1234 个结果/);
+  assert.match(text, /1\. 比超便宜更便宜的dsh看视频插件！& —— 苍穹晓雷 · 1:43 · 播放 3\.0万/);
+  assert.match(text, /https:\/\/www\.bilibili\.com\/video\/BV1Hgx76SEqb/);
+  assert.equal(parseSearchItem({ bvid: 'BV1', title: 'a&#x27;b&#39;c&lt;', duration: '0:1' }).title, "a'b'c<");
+  assert.match(formatFind('不存在的东西', {}), /没找到/);
+  await assert.rejects(find({ query: '' }), /搜索词/);
+  await assert.rejects(find({ query: '字'.repeat(51) }), /50/);
+});
 
 test('parseInput：各种 B站写法', () => {
   assert.deepEqual(parseInput('BV1SPaQ65Esg'), { kind: 'video', bvid: 'BV1SPaQ65Esg', page: 1 });

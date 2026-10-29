@@ -24,6 +24,33 @@ export function wbiSign(params, mixinKey, now = Math.floor(Date.now() / 1000)) {
   return `${query}&w_rid=${crypto.createHash('md5').update(query + mixinKey).digest('hex')}`;
 }
 
+const ENTITY = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&apos;': "'" };
+const stripHtml = (s) => String(s ?? '')
+  .replace(/<[^>]+>/g, '')
+  .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+  .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+  .replace(/&(amp|lt|gt|quot|apos);/g, (m) => ENTITY[m])
+  .trim();
+/** "12:34" / "1:02:03" → 秒 */
+export function parseClock(s) {
+  const parts = String(s ?? '').split(':').map(Number);
+  if (!parts.length || parts.some((n) => !Number.isFinite(n))) return 0;
+  return parts.reduce((acc, n) => acc * 60 + n, 0);
+}
+/** 搜索结果的一条 → 精简字段（标题里的 <em> 高亮去掉） */
+export function parseSearchItem(r) {
+  return {
+    bvid: r.bvid,
+    title: stripHtml(r.title),
+    author: stripHtml(r.author),
+    seconds: parseClock(r.duration),
+    play: Number(r.play) || 0,
+    danmaku: Number(r.video_review) || 0,
+    pubdate: Number(r.pubdate) || 0,
+    desc: stripHtml(r.description).replace(/\s+/g, ' '),
+  };
+}
+
 export class BiliClient {
   /** @param {{cookies?: Record<string,string>, minIntervalMs?: number, fetchImpl?: typeof fetch}} opts */
   constructor({ cookies = {}, minIntervalMs = 350, fetchImpl = fetch } = {}) {
@@ -135,6 +162,24 @@ export class BiliClient {
     if (!r.ok) throw new BiliError(`字幕下载失败 HTTP ${r.status}`, r.status);
     const j = await r.json();
     return (j.body ?? []).map((x) => ({ start: x.from, end: x.to, text: String(x.content ?? '').trim() })).filter((x) => x.text);
+  }
+
+  /**
+   * 站内搜视频。order: totalrank 综合 / click 最多播放 / pubdate 最新 / dm 最多弹幕 / stow 最多收藏；
+   * duration: 0 不限 / 1 十分钟以下 / 2 十到三十分钟 / 3 三十到六十分钟 / 4 一小时以上。
+   */
+  async searchVideos(keyword, { order = 'totalrank', duration = 0, page = 1 } = {}) {
+    await this.ensureBuvid();
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const d = await this.signed('https://api.bilibili.com/x/web-interface/wbi/search/type', { search_type: 'video', keyword, order, duration, page });
+      if (Array.isArray(d?.result)) return { total: d.numResults ?? 0, items: d.result.filter((r) => r.bvid).map(parseSearchItem) };
+      if (!d?.v_voucher) return { total: 0, items: [] };
+      // 风控（返回 v_voucher 而不是结果）：换一个设备 id 再试一次
+      delete this.cookies.buvid3;
+      delete this.cookies.buvid4;
+      await this.ensureBuvid();
+    }
+    throw new BiliError('B站搜索这会儿被风控拦了，过一会儿再搜', 'v_voucher');
   }
 
   /** 官方 AI 总结（要登录；有的视频没有）。 */
