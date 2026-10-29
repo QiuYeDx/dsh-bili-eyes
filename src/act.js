@@ -20,6 +20,9 @@ const MODE_KEY = { like: 'likeMode', fav: 'likeMode', comment: 'commentMode', re
 const QUOTA_KEY = { like: 'likePerDay', fav: 'likePerDay', comment: 'commentPerDay', reply: 'replyPerDay', dm: 'dmPerDay', post: 'postPerDay' };
 const MAX_LEN = { comment: 300, reply: 300, dm: 500, post: 500 };
 const LIGHT = new Set(['like', 'fav']);           // 轻操作：间隔只要 5 秒
+const HIDDEN_PAUSE_MS = 2 * 3600_000;           // 评论被设成「仅自己可见」后，写操作暂停 2 小时（接着发只会更糟）
+const SENT = new Set(['ok', 'hidden']);          // 算「发出去了」的状态（计额度、判重复）
+export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const RISK_CODES = new Set([-352, -412, -509, 12015]);   // 风控类：自动暂停写操作 30 分钟
 const ERROR_HINT = {
   '-101': '登录失效了，要重新扫码登录',
@@ -34,8 +37,8 @@ const ERROR_HINT = {
 
 // ── 存储 ──────────────────────────────────────────────────────────────────
 export function loadDrafts(file = DRAFTS_FILE) {
-  try { const s = JSON.parse(fs.readFileSync(file, 'utf8')); return { next: Number(s.next) || 1, list: Array.isArray(s.list) ? s.list : [], pausedUntil: Number(s.pausedUntil) || 0 }; }
-  catch { return { next: 1, list: [], pausedUntil: 0 }; }
+  try { const s = JSON.parse(fs.readFileSync(file, 'utf8')); return { next: Number(s.next) || 1, list: Array.isArray(s.list) ? s.list : [], pausedUntil: Number(s.pausedUntil) || 0, pauseReason: String(s.pauseReason ?? '') }; }
+  catch { return { next: 1, list: [], pausedUntil: 0, pauseReason: '' }; }
 }
 export function saveDrafts(d, file = DRAFTS_FILE) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -72,7 +75,7 @@ const dayOf = (t) => { const d = new Date(t); return `${d.getFullYear()}-${d.get
 /** 今天每类成功了几次。 */
 export function todayCounts(entries, now = Date.now()) {
   const today = dayOf(now); const out = {};
-  for (const e of entries) if (e.status === 'ok' && dayOf(e.at) === today) out[e.kind] = (out[e.kind] ?? 0) + 1;
+  for (const e of entries) if (SENT.has(e.status) && dayOf(e.at) === today) out[e.kind] = (out[e.kind] ?? 0) + 1;
   return out;
 }
 
@@ -130,7 +133,11 @@ function explain(e) {
   return `${hint ? `${hint}：` : ''}${e?.message ?? e}${code != null && typeof code === 'number' ? `（代码 ${code}）` : ''}`;
 }
 
-/** 真正发请求。返回 {rpid?, info}。 */
+let verifyDelayMs = 2000;
+/** 测试用：发评论后隔多久查可见性。 */
+export function setVerifyDelay(ms) { verifyDelayMs = ms; }
+
+/** 真正发请求。返回 {rpid?, info, state?, hidden?}。 */
 async function perform(client, d) {
   const p = d.payload;
   if (d.kind === 'like' || d.kind === 'fav') {
@@ -141,7 +148,16 @@ async function perform(client, d) {
   }
   if (d.kind === 'comment' || d.kind === 'reply') {
     const r = await client.addComment({ oid: p.oid, type: p.type, message: p.text, root: p.root, parent: p.parent, atNameToMid: p.atNameToMid });
-    return { rpid: String(r?.rpid_str ?? r?.rpid ?? ''), info: '已发出' };
+    const rpid = String(r?.rpid_str ?? r?.rpid ?? '');
+    // B站接受了不等于别人看得到：新号、像脚本的请求常被设成「仅自己可见」（state 17），接口照样返回成功。
+    // 先看返回里带没带状态，没带就隔两秒用自己的视角查一次。
+    let state = r?.reply?.state;
+    if (state == null && rpid && client.commentState) {
+      await sleep(verifyDelayMs);
+      try { state = await client.commentState({ oid: p.oid, type: p.type, rpid, root: d.kind === 'reply' ? p.root : 0 }); } catch { state = null; }
+    }
+    state = state == null ? null : Number(state);
+    return { rpid, state, hidden: state != null && state !== 0, info: state === 0 ? '已发出（已确认公开）' : '已发出' };
   }
   if (d.kind === 'dm') { await client.sendDm({ receiverMid: p.to, text: p.text }); return { info: '已发出' }; }
   if (d.kind === 'post') { const r = await client.postDynamic(p.text); return { rpid: String(r?.dyn_id_str ?? ''), info: '已发出' }; }
@@ -161,14 +177,14 @@ export async function request(req, { cfg, client, sessionId = '', via = 'tool', 
   if (mode === 'off') return refuse(`主人没开「${KIND_TEXT[kind]}」（设置页 → 互动）`);
   if (cfg.writePaused) return refuse('主人在设置页按了「全部停下」');
   const drafts = loadDrafts(draftsFile);
-  if (drafts.pausedUntil > now) return refuse(`刚才被 B站风控拦过，写操作暂停到 ${new Date(drafts.pausedUntil).toLocaleTimeString()}`);
+  if (drafts.pausedUntil > now) return refuse(`${drafts.pauseReason || '刚才被 B站风控拦过'}，写操作暂停到 ${new Date(drafts.pausedUntil).toLocaleTimeString()}`);
 
   const entries = readAudit(2000, auditFile);
   const quota = cfg[QUOTA_KEY[kind]];
   const used = (todayCounts(entries, now)[kind] ?? 0) + (kind === 'fav' ? todayCounts(entries, now).like ?? 0 : kind === 'like' ? todayCounts(entries, now).fav ?? 0 : 0);
   if (used >= quota) return refuse(`今天的「${KIND_TEXT[kind]}」额度用完了（${used}/${quota}）`);
-  if (kind === 'comment' && entries.some((e) => e.kind === 'comment' && e.status === 'ok' && e.target?.oid === String(req.payload.oid))) return refuse('这个视频下面我已经评论过了（同一个视频只发一条顶层评论）');
-  if (kind === 'reply' && entries.filter((e) => e.kind === 'reply' && e.status === 'ok' && e.target?.parent === String(req.payload.parent)).length >= 2) return refuse('这条评论我已经回过两次了');
+  if (kind === 'comment' && entries.some((e) => e.kind === 'comment' && SENT.has(e.status) && e.target?.oid === String(req.payload.oid))) return refuse('这个视频下面我已经评论过了（同一个视频只发一条顶层评论）');
+  if (kind === 'reply' && entries.filter((e) => e.kind === 'reply' && SENT.has(e.status) && e.target?.parent === String(req.payload.parent)).length >= 2) return refuse('这条评论我已经回过两次了');
   const pendingSame = drafts.list.find((x) => x.status === 'pending' && x.kind === kind && JSON.stringify(x.payload) === JSON.stringify(req.payload));
   if (pendingSame) return { status: 'draft', draft: pendingSame, text: `这条已经起草过了（#${pendingSame.id}），还在等主人同意。` };
 
@@ -198,13 +214,23 @@ async function send(d, { cfg, client, entries = readAudit(2000), now = Date.now(
   }
   try {
     const r = await perform(client, d);
-    audit({ kind: d.kind, status: 'ok', how, draft: draftId, target: d.target, text: d.payload?.text, rpid: r.rpid ?? '' }, auditFile);
-    return { status: 'sent', text: `${KIND_TEXT[d.kind]}${r.info}：${clip(d.preview, 80)}`, rpid: r.rpid };
+    if (r.hidden) {
+      audit({ kind: d.kind, status: 'hidden', how, draft: draftId, target: d.target, text: d.payload?.text, rpid: r.rpid ?? '', state: r.state }, auditFile);
+      const drafts = loadDrafts(draftsFile);
+      drafts.pausedUntil = now + HIDDEN_PAUSE_MS;
+      drafts.pauseReason = '上一条评论被 B站设成了仅自己可见';
+      saveDrafts(drafts, draftsFile);
+      return { status: 'hidden', rpid: r.rpid, text: `${KIND_TEXT[d.kind]}发出去了，但 B站把它设成了「仅自己可见」（风控或审核，状态 ${r.state}），别人看不到，被 @ 的人也收不到通知。照实告诉主人，别说「发好了」，也别换个说法重发；写操作先暂停 2 小时。` };
+    }
+    audit({ kind: d.kind, status: 'ok', how, draft: draftId, target: d.target, text: d.payload?.text, rpid: r.rpid ?? '', state: r.state ?? null }, auditFile);
+    const unsure = r.state == null && (d.kind === 'comment' || d.kind === 'reply') ? '（没能确认别人看不看得到）' : '';
+    return { status: 'sent', text: `${KIND_TEXT[d.kind]}${r.info}：${clip(d.preview, 80)}${unsure}`, rpid: r.rpid };
   } catch (e) {
     if (e instanceof ActError) throw e;
     if (RISK_CODES.has(e?.code)) {
       const drafts = loadDrafts(draftsFile);
       drafts.pausedUntil = now + 30 * 60_000;
+      drafts.pauseReason = '刚才被 B站风控拦过';
       saveDrafts(drafts, draftsFile);
     }
     const why = explain(e);
@@ -231,7 +257,7 @@ export async function confirm(draftId, decision, { cfg, client, sessionId = '', 
   }
   if (cfg.writePaused) return { status: 'refused', text: '没发：主人在设置页按了「全部停下」' };
   if (cfg[MODE_KEY[d.kind]] === 'off') return { status: 'refused', text: `没发：主人把「${KIND_TEXT[d.kind]}」关了` };
-  if (drafts.pausedUntil > now) return { status: 'refused', text: `没发：写操作暂停到 ${new Date(drafts.pausedUntil).toLocaleTimeString()}（刚被风控拦过）` };
+  if (drafts.pausedUntil > now) return { status: 'refused', text: `没发：写操作暂停到 ${new Date(drafts.pausedUntil).toLocaleTimeString()}（${drafts.pauseReason || '刚被风控拦过'}）` };
   let how = 'ui';
   if (via !== 'ui') {
     if (!cfg.gateUrl) return { status: 'refused', text: `没法确认主人同意了：没配门卫。草稿 #${d.id} 要主人在设置页里点同意。` };
@@ -250,19 +276,42 @@ export async function confirm(draftId, decision, { cfg, client, sessionId = '', 
     how = 'owner';
   }
   const r = await send(d, { cfg, client, now, auditFile, draftsFile, how, draftId: d.id });
-  if (r.status === 'sent') finish('sent', r.rpid ?? '');
+  if (r.status === 'sent' || r.status === 'hidden') finish('sent', r.rpid ?? '');
   else if (r.status === 'failed') finish('failed', r.text);
   return r;
 }
 
 /** 设置页：删掉一条自己发的评论（审计里那条 ok 的记录）。 */
 export async function deleteSent(auditId, { client, auditFile = ACTIONS_FILE } = {}) {
-  const e = readAudit(2000, auditFile).find((x) => x.id === auditId && x.status === 'ok');
+  const e = readAudit(2000, auditFile).find((x) => x.id === auditId && SENT.has(x.status));
   if (!e) throw new ActError('找不到这条记录');
   if (!(e.kind === 'comment' || e.kind === 'reply') || !e.rpid) throw new ActError('只有评论和回复能在这里删');
   await client.delComment({ oid: e.target.oid, type: e.target.type ?? 1, rpid: e.rpid });
   audit({ kind: 'delete', status: 'ok', ref: e.id, target: e.target, text: e.text }, auditFile);
   return { deleted: e.id };
+}
+
+/**
+ * 设置页「再查一次」：把最近 7 天「仅自己可见」的评论重新查一遍，变公开了就记一条 visible。
+ * 返回 {checked, nowVisible}。
+ */
+export async function recheckHidden({ client, auditFile = ACTIONS_FILE, now = Date.now() } = {}) {
+  const entries = readAudit(2000, auditFile);
+  const gone = deletedIds(entries);
+  const seen = visibleIds(entries);
+  let checked = 0; let nowVisible = 0;
+  for (const e of entries) {
+    if (e.status !== 'hidden' || !e.rpid || gone.has(e.id) || seen.has(e.id) || now - e.at > 7 * 86400_000) continue;
+    checked += 1;
+    const state = await client.commentState({ oid: e.target.oid, type: e.target.type ?? 1, rpid: e.rpid, root: e.kind === 'reply' ? e.target.root : 0 }).catch(() => null);
+    if (state === 0) { audit({ kind: 'visible', status: 'ok', ref: e.id, target: e.target, text: e.text }, auditFile); nowVisible += 1; }
+  }
+  return { checked, nowVisible };
+}
+
+/** 后来变公开了的审计记录 id 集合。 */
+export function visibleIds(entries) {
+  return new Set(entries.filter((e) => e.kind === 'visible' && e.status === 'ok').map((e) => e.ref));
 }
 
 /** 设置页：已删除的审计记录 id 集合。 */

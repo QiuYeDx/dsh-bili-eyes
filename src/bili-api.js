@@ -348,10 +348,27 @@ export class BiliClient {
 
   /** 发评论；给 root（和 parent）就是楼中楼。atNameToMid: {昵称: mid}，让正文里的「@昵称」变成真的 @。 */
   addComment({ oid, type = 1, message, root = 0, parent = 0, atNameToMid = null }) {
-    const form = { oid, type, message, plat: 1, csrf: this.csrf() };
+    // 和网页端发评论时带的字段一致（少了这些更像脚本）
+    const form = { oid, type, message, plat: 1, ordering: 'heat', jsonp: 'jsonp', gaia_source: 'main_web', statistics: JSON.stringify({ appId: 100, platform: 5 }), csrf: this.csrf() };
     if (root && String(root) !== '0') { form.root = root; form.parent = parent && String(parent) !== '0' ? parent : root; }
     if (atNameToMid && Object.keys(atNameToMid).length) form.at_name_to_mid = JSON.stringify(atNameToMid);
     return this.request('https://api.bilibili.com/x/v2/reply/add', { method: 'POST', form });
+  }
+
+  /**
+   * 用这个账号自己的视角查一条评论的状态：0 = 正常公开；17 = 仅自己可见（风控 / 审核中）；
+   * 查不到返回 null。楼中楼要给 root（它所在的那一楼）。
+   */
+  async commentState({ oid, type = 1, rpid, root = 0 }) {
+    const isRoot = !root || String(root) === '0' || String(root) === String(rpid);
+    for (let pn = 1; pn <= (isRoot ? 1 : 3); pn += 1) {
+      const d = await this.request(`https://api.bilibili.com/x/v2/reply/detail?type=${type}&oid=${oid}&root=${isRoot ? rpid : root}&ps=20&pn=${pn}`);
+      if (isRoot) return d?.root ? Number(d.root.state) : null;
+      const hit = [...(d?.root?.replies ?? []), ...(d?.replies ?? [])].find((x) => String(x.rpid) === String(rpid));
+      if (hit) return Number(hit.state);
+      if (!(d?.replies ?? []).length) break;
+    }
+    return null;
   }
 
   delComment({ oid, type = 1, rpid }) {

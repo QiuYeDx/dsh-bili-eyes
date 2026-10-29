@@ -593,7 +593,7 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
 
     // ── 互动 ─────────────────────────────────────────────────────────────────
     const MODE_TEXT = { off: ['关', ''], approve: ['先问主人', 'brand'], auto: ['直接发', 'pink'] };
-    const LOG_STATUS = { ok: ['已发', 'ok'], fail: ['失败', 'bad'], refused: ['拒绝', ''], draft: ['起草', 'brand'], rejected: ['丢掉', ''] };
+    const LOG_STATUS = { ok: ['已发', 'ok'], hidden: ['仅自己可见', 'bad'], fail: ['失败', 'bad'], refused: ['拒绝', ''], draft: ['起草', 'brand'], rejected: ['丢掉', ''] };
 
     function Interact({ toast, active }) {
       const st = useView('act');
@@ -601,6 +601,7 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
       useEffect(() => { if (first.current) { first.current = false; return; } if (active) st.reload(); }, [active]);
       const draftDo = (id, decision) => api.post('draft', { id, decision }).then((r) => { toast(r.text, r.status === 'failed' || r.status === 'refused' && decision === 'send'); st.reload(); }, (e) => toast(e.message, true));
       const del = (id) => api.post('deleteSent', { id }).then(() => { toast('已在 B站删掉'); st.reload(); }, (e) => toast(e.message, true));
+      const recheck = () => api.post('recheck').then((r) => { toast(r.checked ? `查了 ${r.checked} 条，${r.nowVisible} 条已经公开` : '没有要复查的'); st.reload(); }, (e) => toast(e.message, true));
       return h(React.Fragment, null,
         h(Loading, { state: st }, (d) => {
           const lvl = d.login.level;
@@ -616,7 +617,7 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
                 h('div', { className: 'be-faint' }, d.owner.mid ? `主人：${d.owner.name || '（昵称没查到）'}（UID ${d.owner.mid}）` : '还没设置主人 UID：不能 @ 主人、不能私信'),
                 h('div', { className: 'be-row' }, Object.entries(d.modes).map(([k, m]) => h('span', { key: k, className: `be-badge ${MODE_TEXT[m][1]}` }, `${{ like: '点赞', comment: '评论', dm: '私信', post: '动态' }[k]}：${MODE_TEXT[m][0]}`)))),
               h(Card, { title: '今天' },
-                (d.paused || d.pausedUntil > 0) && h('div', { className: 'be-err' }, d.paused ? '已按「全部停下」：所有写操作都会被拒绝' : `刚被 B站风控拦过：写操作暂停到 ${new Date(d.pausedUntil).toLocaleTimeString()}`),
+                (d.paused || d.pausedUntil > 0) && h('div', { className: 'be-err' }, d.paused ? '已按「全部停下」：所有写操作都会被拒绝' : `${d.pauseReason || '刚被 B站风控拦过'}：写操作暂停到 ${new Date(d.pausedUntil).toLocaleTimeString()}`),
                 kinds.map(([k, label, used, max]) => h(Meter, { key: k, label, used, max })))),
             h(Card, { title: '待同意', aside: d.drafts.length ? `${d.drafts.length} 条` : '', desc: d.gate ? '她起草后会先在聊天里问主人；主人说「发」她会自己发出。你也可以直接在这里处理。' : '没配门卫：她没法确认主人同意，草稿只能在这里处理。' },
               d.drafts.length
@@ -626,11 +627,12 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
                   x.target?.title && h('div', { className: 'be-faint' }, x.target.url ? h('a', { href: x.target.url, target: '_blank', rel: 'noreferrer', style: { color: 'inherit' } }, `《${x.target.title}》`) : `《${x.target.title}》`),
                   x.expired ? h('div', { className: 'be-faint' }, '已过期') : h('div', { className: 'be-row' }, h(Btn, { kind: 'primary', onClick: () => draftDo(x.id, 'send') }, '同意并发出'), h(Btn, { onClick: () => draftDo(x.id, 'drop') }, '丢掉')))))
                 : h('div', { className: 'be-empty' }, '没有待同意的草稿。')),
-            h(Card, { title: '记录', aside: d.log.length ? `最近 ${d.log.length} 条` : '' },
+            h(Card, { title: '记录', aside: d.log.length ? `最近 ${d.log.length} 条` : '', desc: d.log.some((e) => e.status === 'hidden' && !e.nowVisible && !e.deleted) ? '「仅自己可见」= B站接受了，但被风控或审核藏起来了，别人看不到、被 @ 的人也收不到通知。有时审核过后会公开，可以过一阵再查。' : '' },
+              d.log.some((e) => e.status === 'hidden' && !e.nowVisible && !e.deleted) && h('div', null, h(Btn, { onClick: recheck }, '再查一次可见性')),
               d.log.length
                 ? h('div', { className: 'be-hist' }, d.log.map((e) => {
-                  const [sl, sc] = LOG_STATUS[e.status] ?? [e.status, ''];
-                  const canDel = e.status === 'ok' && (e.kind === 'comment' || e.kind === 'reply') && e.rpid && !e.deleted;
+                  const [sl, sc] = e.nowVisible ? ['已公开', 'ok'] : (LOG_STATUS[e.status] ?? [e.status, '']);
+                  const canDel = (e.status === 'ok' || e.status === 'hidden') && (e.kind === 'comment' || e.kind === 'reply') && e.rpid && !e.deleted;
                   return h('div', { key: e.id, className: 'be-hrow' },
                     h('div', { className: 'when' }, when(e.at)),
                     h('div', { style: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 } },

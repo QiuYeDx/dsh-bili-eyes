@@ -1,6 +1,6 @@
 {
   "name": "dsh-bili-eyes",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "DeepSeek Harness 插件：让模型「看」B站视频（分镜图 + 台词 + 热评 + 弹幕热词）、搜视频、逛 B站（推荐 / 热门 / 评论区 / 摘要式冲浪）、看收件箱；点赞、评论、私信、动态默认关闭，可按档位和额度开启并由主人同意。DSH 设置里带管理界面。",
   "keywords": [
     "dsh",

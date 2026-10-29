@@ -1,4 +1,6 @@
 // 冲浪与互动：写操作规则、草稿与同意、收件箱、门卫、写接口的请求格式、bili_surf 的流程。全部用假的 B站 / 门卫。
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -253,4 +255,71 @@ test('冲浪：模型挑选；输出不对时按播放量挑', async () => {
   assert.deepEqual(fallback.map((p) => p.x.bvid), ['c', 'b']);
   const failing = await choose(cands, { ask: async () => { throw new Error('模型挂了'); }, picks: 1 });
   assert.deepEqual(failing.map((p) => p.x.bvid), ['c']);
+});
+
+// ── 评论被设成「仅自己可见」 ───────────────────────────────────────────────
+const { setVerifyDelay, recheckHidden } = await import('../src/act.js');
+const { withDevice, makeUuid, ticketSign, ensureDevice } = await import('../src/device.js');
+setVerifyDelay(0);
+
+test('仅自己可见：照实说、记成 hidden、算额度、暂停写操作', async () => {
+  const f = files();
+  const client = { ...fakeClient(), addComment: async () => ({ rpid: 7, rpid_str: '7', reply: { state: 17 } }) };
+  const cfg = cfgOf({ commentMode: 'auto' });
+  const r = await request(commentReq('50'), { cfg, client, ...f });
+  assert.equal(r.status, 'hidden');
+  assert.match(r.text, /仅自己可见/);
+  assert.match(r.text, /别说「发好了」/);
+  const e = readAudit(10, f.auditFile)[0];
+  assert.equal(e.status, 'hidden');
+  assert.equal(todayCounts(readAudit(10, f.auditFile)).comment, 1);
+  assert.match((await request(commentReq('51'), { cfg, client, now: Date.now() + 120_000, ...f })).text, /仅自己可见.*暂停/);
+  assert.match((await request(commentReq('50'), { cfg, client, now: Date.now() + 3 * 3600_000, ...f })).text, /已经评论过/, '隐藏的也算评论过');
+});
+
+test('返回里没带状态时自己查一次：公开就说已确认，查不到就说没确认', async () => {
+  const f = files(); const f2 = files();
+  const pub = { ...fakeClient(), commentState: async (q) => { assert.equal(q.rpid, '999'); return 0; } };
+  assert.match((await request(commentReq('60'), { cfg: cfgOf({ commentMode: 'auto' }), client: pub, ...f })).text, /已确认公开/);
+  const unknown = { ...fakeClient(), commentState: async () => null };
+  assert.match((await request(commentReq('61'), { cfg: cfgOf({ commentMode: 'auto' }), client: unknown, ...f2 })).text, /没能确认/);
+});
+
+test('楼中楼查可见性时带上它所在的楼', async () => {
+  const f = files(); let asked = null;
+  const client = { ...fakeClient(), commentState: async (q) => { asked = q; return 17; } };
+  const req = { kind: 'reply', payload: { oid: '70', type: 1, root: '500', parent: '501', text: '同意' }, preview: '回复', target: { oid: '70', root: '500', parent: '501' } };
+  assert.equal((await request(req, { cfg: cfgOf({ commentMode: 'auto' }), client, ...f })).status, 'hidden');
+  assert.deepEqual(asked, { oid: '70', type: 1, rpid: '999', root: '500' });
+});
+
+test('再查一次：变公开的记成 visible，删过的不查', async () => {
+  const f = files();
+  const client = { ...fakeClient(), addComment: async () => ({ rpid_str: '8', reply: { state: 17 } }), commentState: async () => 0 };
+  await request(commentReq('80'), { cfg: cfgOf({ commentMode: 'auto' }), client, ...f });
+  const r = await recheckHidden({ client, auditFile: f.auditFile });
+  assert.deepEqual(r, { checked: 1, nowVisible: 1 });
+  assert.deepEqual(await recheckHidden({ client, auditFile: f.auditFile }), { checked: 0, nowVisible: 0 });
+});
+
+test('发评论带上网页端的字段；设备标识固定、ticket 签名正确', async () => {
+  const { reqs, client } = recordingClient();
+  await client.addComment({ oid: 1, message: 'hi' });
+  const form = new URLSearchParams(reqs.at(-1).body);
+  assert.equal(form.get('gaia_source'), 'main_web');
+  assert.equal(form.get('plat'), '1');
+  assert.deepEqual(JSON.parse(form.get('statistics')), { appId: 100, platform: 5 });
+  assert.match(makeUuid(1_700_000_012_345), /^[0-9A-F-]{36}12345infoc$/);
+  assert.equal(ticketSign(1700000000), require('node:crypto').createHmac('sha256', 'XgwSnGZ1p').update('ts1700000000').digest('hex'));
+  assert.deepEqual(withDevice({ SESSDATA: 's', buvid3: 'mine' }, { buvid3: 'dev', _uuid: 'u' }), { SESSDATA: 's', buvid3: 'mine', _uuid: 'u' });
+  const file = path.join(tmp, 'device.json');
+  const calls = [];
+  const fake = { cookies: { SESSDATA: 's', bili_jct: 'c' }, request: async (url) => { calls.push(url); return url.includes('spi') ? { b_3: 'B3', b_4: 'B4' } : { ticket: 'T', created_at: 100, ttl: 259200 }; } };
+  await ensureDevice(fake, { file, now: 100_000 });
+  assert.equal(fake.cookies.buvid3, 'B3');
+  assert.equal(fake.cookies.bili_ticket, 'T');
+  assert.match(calls[1], /GenWebTicket\?key_id=ec02&hexsign=[0-9a-f]{64}&context%5Bts%5D=100&csrf=c/);
+  const again = { cookies: { SESSDATA: 's', bili_jct: 'c' }, request: async () => { throw new Error('不该再请求'); } };
+  await ensureDevice(again, { file, now: 100_000 });
+  assert.equal(again.cookies.buvid3, 'B3', '第二次直接用存下来的');
 });

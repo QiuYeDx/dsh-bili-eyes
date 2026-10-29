@@ -3,6 +3,7 @@ import { loadConfig } from './config.js';
 import { loadCredential } from './credential.js';
 import { InputError, makeClient, resolveVideo, clip } from './look.js';
 import { request, confirm, checkText, loadDrafts, ActError } from './act.js';
+import { ensureDevice } from './device.js';
 import { loadInbox, saveInbox, checkInbox, deliver, inQuiet, formatInbox, markItems } from './inbox.js';
 
 // bili_comments 返回过的评论：rpid → {root, oid, user}。回复时靠它找到楼层（楼中楼的 root 不是它自己）。
@@ -31,10 +32,13 @@ export function sessionIdOf(exec) {
   return '';
 }
 
-function writeClient(cfg) {
+/** 写操作用的客户端：已登录，并补齐设备标识（见 device.js）。 */
+export async function writeClient(cfg) {
   const cred = loadCredential();
   if (!cred) throw new InputError('B站没登录，先在设置页扫码登录（建议用小号）');
-  return makeClient({ ...cfg, useLogin: true }).client;
+  const client = makeClient({ ...cfg, useLogin: true }).client;
+  await ensureDevice(client);
+  return client;
 }
 
 const opts = (cfg, client, exec, extra = {}) => ({ cfg, client, sessionId: sessionIdOf(exec), via: 'tool', ...extra });
@@ -45,14 +49,14 @@ async function afterSent(r, inboxId) {
 }
 
 export async function likeTool(args, exec, { cfg = loadConfig() } = {}) {
-  const client = writeClient(cfg);
+  const client = await writeClient(cfg);
   const { v, url } = await resolveVideo(args.url, client);
   const kind = args.fav ? 'fav' : 'like';
   return request({ kind, payload: { aid: v.aid }, preview: `《${clip(v.title, 40)}》`, target: { bvid: v.bvid, title: v.title, oid: String(v.aid), url } }, opts(cfg, client, exec));
 }
 
 export async function commentTool(args, exec, { cfg = loadConfig() } = {}) {
-  const client = writeClient(cfg);
+  const client = await writeClient(cfg);
   const name = await ownerName(client, cfg).catch(() => '');
   let kind = 'comment'; let target; let payload; let who = ''; let inboxId = '';
   if (args.inbox) {
@@ -83,14 +87,14 @@ export async function commentTool(args, exec, { cfg = loadConfig() } = {}) {
 
 export async function dmTool(args, exec, { cfg = loadConfig() } = {}) {
   if (!cfg.ownerMid) return { status: 'refused', text: '没发：主人的 B站 UID 还没设置（设置页 → 互动），私信只能发给主人' };
-  const client = writeClient(cfg);
+  const client = await writeClient(cfg);
   let text;
   try { text = checkText('dm', args.text, { ownerName: await ownerName(client, cfg).catch(() => '') }); } catch (e) { if (e instanceof ActError) return { status: 'refused', text: `没发：${e.message}` }; throw e; }
   return request({ kind: 'dm', payload: { to: cfg.ownerMid, text }, preview: `私信主人：${clip(text, 60)}`, target: { to: String(cfg.ownerMid) } }, opts(cfg, client, exec));
 }
 
 export async function postTool(args, exec, { cfg = loadConfig() } = {}) {
-  const client = writeClient(cfg);
+  const client = await writeClient(cfg);
   let text;
   try { text = checkText('post', args.text, { ownerName: await ownerName(client, cfg).catch(() => '') }); } catch (e) { if (e instanceof ActError) return { status: 'refused', text: `没发：${e.message}` }; throw e; }
   if (text.includes('@')) return { status: 'refused', text: '没发：动态里不 @ 人' };
@@ -101,7 +105,7 @@ export async function confirmTool(args, exec, { cfg = loadConfig() } = {}) {
   const id = Math.round(Number(String(args.draft ?? '').replace(/^#/, '')));
   if (!(id > 0)) throw new InputError('draft 是草稿编号（#后面的数字）');
   const decision = args.decision === 'drop' ? 'drop' : 'send';
-  const client = decision === 'send' ? writeClient(cfg) : null;
+  const client = decision === 'send' ? await writeClient(cfg) : null;
   const r = await confirm(id, decision, opts(cfg, client, exec));
   if (r.status === 'sent') {
     const d = loadDrafts().list.find((x) => x.id === id);

@@ -9,6 +9,7 @@ import { runStoryboard, DETAIL_CHARS, truncateAtSentence } from 'dsh-video-story
 import { BiliClient } from './bili-api.js';
 import { loadConfig, applyEnv, DATA_DIR } from './config.js';
 import { loadCredential, COOKIES_TXT } from './credential.js';
+import { withDevice } from './device.js';
 import { danmakuStats, parseDanmaku } from './danmaku.js';
 import { parseInput, resolveShort, canonicalUrl, InputError } from './url.js';
 import { record } from './history.js';
@@ -157,7 +158,8 @@ export async function resolveVideo(input, client) {
 
 export function makeClient(cfg) {
   const cred = cfg.useLogin ? loadCredential() : null;
-  return { client: new BiliClient({ cookies: cred?.cookies ?? {} }), cred };
+  // 登录时带上固定的设备标识（device.js），和浏览器一样每次都是同一台「设备」
+  return { client: new BiliClient({ cookies: cred ? withDevice(cred.cookies) : {} }), cred };
 }
 
 /**

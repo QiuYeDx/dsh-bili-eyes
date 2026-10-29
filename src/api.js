@@ -15,8 +15,8 @@ import { BiliError } from './bili-api.js';
 import { feed } from './feed.js';
 import { surf } from './surf.js';
 import { loadInbox, saveInbox, markItems } from './inbox.js';
-import { pollInbox, ownerName } from './interact.js';
-import { loadDrafts, readAudit, todayCounts, confirm, deleteSent, deletedIds, KIND_TEXT, ActError } from './act.js';
+import { pollInbox, ownerName, writeClient } from './interact.js';
+import { loadDrafts, readAudit, todayCounts, confirm, deleteSent, deletedIds, visibleIds, recheckHidden, KIND_TEXT, ActError } from './act.js';
 import { sessionContext } from './gate.js';
 
 export const API_ROUTE = '/api/bili-eyes';
@@ -174,6 +174,7 @@ async function getView(view, ctx) {
   if (view === 'act') {
     const entries = readAudit(500);
     const gone = deletedIds(entries);
+    const shown = visibleIds(entries);
     const drafts = loadDrafts();
     const login = await loginInfo();
     let owner = '';
@@ -186,8 +187,9 @@ async function getView(view, ctx) {
       quota: { like: cfg.likePerDay, comment: cfg.commentPerDay, reply: cfg.replyPerDay, dm: cfg.dmPerDay, post: cfg.postPerDay },
       paused: cfg.writePaused,
       pausedUntil: drafts.pausedUntil > Date.now() ? drafts.pausedUntil : 0,
+      pauseReason: drafts.pauseReason,
       drafts: drafts.list.filter((d) => d.status === 'pending').map((d) => ({ ...d, expired: Date.now() - d.createdAt > cfg.draftMinutes * 60_000 })),
-      log: entries.filter((e) => e.kind !== 'delete').slice(0, 60).map((e) => ({ ...e, deleted: gone.has(e.id) })),
+      log: entries.filter((e) => e.kind !== 'delete' && e.kind !== 'visible').slice(0, 60).map((e) => ({ ...e, deleted: gone.has(e.id), nowVisible: shown.has(e.id) })),
       kindText: KIND_TEXT,
       gate: Boolean(cfg.gateUrl),
     };
@@ -297,10 +299,11 @@ async function postAction(body, ctx) {
     }
     case 'draft': {
       const decision = body.decision === 'drop' ? 'drop' : 'send';
-      const client = decision === 'send' ? makeClient({ ...cfg, useLogin: true }).client : null;
+      const client = decision === 'send' ? await writeClient(cfg) : null;
       return confirm(Number(body.id), decision, { cfg, client, via: 'ui' });
     }
-    case 'deleteSent': return deleteSent(String(body.id ?? ''), { client: makeClient({ ...cfg, useLogin: true }).client });
+    case 'recheck': return recheckHidden({ client: await writeClient(cfg) });
+    case 'deleteSent': return deleteSent(String(body.id ?? ''), { client: await writeClient(cfg) });
     default: throw new Error(`不认识的操作：${body.action}`);
   }
 }
