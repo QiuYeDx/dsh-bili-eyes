@@ -9,13 +9,15 @@ export const CONFIG_FILE = path.join(DSH_HOME, 'bili-eyes.json');
 
 export const DEFAULTS = Object.freeze({
   maxPerHour: 12,          // 每小时最多新看几个视频（缓存命中不算）
-  maxFullSeconds: 1200,    // 超过这个时长且没给 from/to：只看开头 longWindowSeconds
-  longWindowSeconds: 600,
-  timeoutSeconds: 150,     // 分镜超过这么久就放弃画面，只返回文字信息
+  maxFullSeconds: 7200,    // 这个时长以内看完整；更长且没给 from/to：只看开头 longWindowSeconds
+  longWindowSeconds: 7200,
+  secondsPerCell: 60,      // 每格大约覆盖多久；视频越长分镜图越多（每张 16 格），直到 maxSheets
+  maxSheets: 4,            // 一次最多几张分镜图（每张约 384 token）
+  timeoutSeconds: 150,     // 分镜的最短超时；长视频会按时长自动放宽（最多 10 分钟），超时就只返回文字信息
   cacheHours: 24,          // 同一视频同一窗口的结果缓存多久
   comments: 5,             // 带几条热评（0 = 不带）
   danmaku: true,           // 带弹幕热词与高能时段
-  textBudget: 2600,        // 返回文字的大致字数上限
+  textBudget: 2600,        // 返回文字的大致字数上限（一张图时；每多一张图再加 1000）
   useLogin: true,          // 有登录信息时用（AI 字幕、AI 总结、高画质）
   cacheDir: '',            // 分镜缓存目录（空 = dsh-video-storyboard 默认，在 C 盘）
   mediaDir: '',            // 下载的 360P 视频放哪（空 = 系统临时目录）

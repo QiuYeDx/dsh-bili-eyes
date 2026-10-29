@@ -34,6 +34,14 @@ export function cellsFor(seconds) {
   if (seconds <= 900) return 12;
   return 16;
 }
+// 长视频不硬塞进一张图：每格约 secondsPerCell 秒，每张 16 格，最多 maxSheets 张
+export function sheetsFor(seconds, { secondsPerCell = 60, maxSheets = 4 } = {}) {
+  return Math.max(1, Math.min(maxSheets, Math.ceil(seconds / (16 * secondsPerCell))));
+}
+// 长视频的下载、扫描、转写都更久：超时按时长放宽，最多 10 分钟
+export function timeoutFor(seconds, minSeconds = 150) {
+  return Math.max(minSeconds, Math.min(600, Math.round(90 + seconds / 8)));
+}
 
 const TRANSCRIPT_NOTE = {
   'no-key': '没有台词：本机转写服务没开，也没有字幕',
@@ -48,7 +56,9 @@ export function compactCells(result, maxCellChars) {
   const src = result.transcript?.source;
   if (src && TRANSCRIPT_NOTE[src]) lines.push(`（${TRANSCRIPT_NOTE[src]}）`);
   else if (result.plan?.inputs && result.plan.inputs.speechRate === 0) lines.push('（这段基本没人说话：音乐或环境声）');
+  const multi = (result.sheets?.length ?? 0) > 1;
   for (const sheet of result.sheets ?? []) {
+    if (multi) lines.push(`—— 第 ${sheet.sheet} 张图 ——`);
     for (const c of sheet.cells ?? []) {
       const text = maxCellChars > 0 ? truncateAtSentence(String(c.text ?? '').trim(), maxCellChars) : '';
       const tiles = c.sub ? `（这一格里拼了 ${c.sub * c.sub} 张小图）` : '';
@@ -161,8 +171,10 @@ export async function look(args, { cfg = loadConfig(), log = () => {} } = {}) {
   }
   if (to != null && to <= from) throw new InputError('to 要大于 from');
   const detail = args.detail === 'low' ? 'low' : 'med';
+  const span = (to ?? duration) - from;
+  const sheets = sheetsFor(span, cfg);
 
-  const key = cacheKey(['look', 2, v.bvid, video.page, from, to, detail, login.state === 'ok']);
+  const key = cacheKey(['look', 3, v.bvid, video.page, from, to, detail, login.state === 'ok']);
   const hit = readCache(key, cfg.cacheHours);
   if (hit) return { ...hit, cached: true };
 
@@ -205,8 +217,8 @@ export async function look(args, { cfg = loadConfig(), log = () => {} } = {}) {
         input: video.url,
         from,
         ...(to != null ? { to } : {}),
-        cells: cellsFor((to ?? duration) - from),
-        sheets: 1,
+        cells: sheets > 1 ? 16 : cellsFor(span),
+        sheets,
         pick: 'sharp',
         burn: 'index',
         transcript: 'auto',
@@ -216,7 +228,7 @@ export async function look(args, { cfg = loadConfig(), log = () => {} } = {}) {
           allowAnonymous: true,
           scanHeight: 360,
         },
-      }), cfg.timeoutSeconds * 1000));
+      }), timeoutFor(span, cfg.timeoutSeconds) * 1000));
       recent.push(Date.now());
       pngs = result.sheets.map((s) => s.png);
       storyboard = result;
@@ -257,8 +269,8 @@ export async function look(args, { cfg = loadConfig(), log = () => {} } = {}) {
   const tail = [partial, visualNote].filter(Boolean).join('\n');
   let body = '';
   if (storyboard) {
-    const intro = `画面与台词：上面那张分镜图按格编号（编号烧在图上），下面是每格的时间和台词${transcriptSource ? `（台词来自${transcriptSource}）` : ''}。想看清某几秒，用 bili_look_zoom 给 from/to。`;
-    const room = Math.max(400, cfg.textBudget - head.length - tail.length - intro.length);
+    const intro = `画面与台词：上面${sheets > 1 ? ` ${sheets} 张分镜图按时间先后排，格号连续` : '那张分镜图按格编号'}（编号烧在图上），下面是每格的时间和台词${transcriptSource ? `（台词来自${transcriptSource}）` : ''}。想看清某几秒，用 bili_look_zoom 给 from/to。`;
+    const room = Math.max(400, cfg.textBudget + 1000 * (sheets - 1) - head.length - tail.length - intro.length);
     body = `${intro}\n${fitCells(storyboard, room, DETAIL_CHARS[detail])}`;
   }
   const text = [head, body, tail].filter(Boolean).join('\n\n');

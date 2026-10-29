@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { parseInput, resolveShort, canonicalUrl, InputError } from '../src/url.js';
 import { wbiMixinKey, wbiSign } from '../src/bili-api.js';
 import { parseDanmaku, danmakuStats, normalizeDanmaku } from '../src/danmaku.js';
-import { compactCells, cellsFor, fitCells, isAd } from '../src/look.js';
+import { compactCells, cellsFor, fitCells, isAd, sheetsFor, timeoutFor } from '../src/look.js';
 
 test('parseInput：各种 B站写法', () => {
   assert.deepEqual(parseInput('BV1SPaQ65Esg'), { kind: 'video', bvid: 'BV1SPaQ65Esg', page: 1 });
@@ -75,4 +75,12 @@ test('置顶广告识别', () => {
   assert.equal(isAd('好耶，第一次伍孚刺杀失败'), false);
   assert.equal(isAd('https://b23.tv/abc'), true, '连续调用也稳定（没有 lastIndex 串状态）');
   assert.equal(isAd('评论区抽奖，下单同款'), true);
+});
+
+test('长视频分几张图、超时放宽', () => {
+  assert.deepEqual([sheetsFor(49), sheetsFor(900), sheetsFor(1747), sheetsFor(3600), sheetsFor(7200)], [1, 1, 2, 4, 4]);
+  assert.equal(sheetsFor(1747, { secondsPerCell: 30, maxSheets: 4 }), 4);
+  assert.deepEqual([timeoutFor(60), timeoutFor(1747), timeoutFor(7200)], [150, 308, 600]);
+  const r = { transcript: { source: 'file' }, sheets: [{ sheet: 1, cells: [{ i: 1, t_start: 0, t_end: 60, text: 'a' }] }, { sheet: 2, cells: [{ i: 2, t_start: 60, t_end: 120, text: 'b' }] }] };
+  assert.match(compactCells(r, 60), /—— 第 1 张图 ——\n格1 .*\n—— 第 2 张图 ——\n格2 /);
 });
