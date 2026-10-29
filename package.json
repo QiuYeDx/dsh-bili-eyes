@@ -1,6 +1,6 @@
 {
   "name": "dsh-bili-eyes",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "DeepSeek Harness 插件：让模型「看」B站视频——一张分镜图（基于 dsh-video-storyboard）+ 台词 + 热评 + 弹幕热词，只读、只认 B站链接，适合接给 QQ 机器人。",
   "keywords": ["dsh", "dsh-plugin", "deepseek-harness", "bilibili", "video", "storyboard", "qq-bot"],
   "license": "MIT",

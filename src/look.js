@@ -326,6 +326,65 @@ export async function lookZoom(args, { cfg = loadConfig(), log = () => {} } = {}
   return { text, pngs, cached: false };
 }
 
+// ── 本机视频文件（给别的插件当库用，不注册成工具）───────────────────────────
+// 比如 QQ 聊天里直接发的视频：由调用方（QQ 侧插件）负责下载到自己的缓存目录，再交给这里出分镜。
+// 模型永远传不了本机路径：这个函数只在插件代码里调用。
+/**
+ * @param {{file:string, title?:string, from?:number, to?:number, detail?:'low'|'med', note?:string}} args
+ * @returns {Promise<{text:string, pngs:Buffer[], cached:boolean, duration:number}>}
+ */
+export async function lookFile(args, { cfg = loadConfig(), log = () => {} } = {}) {
+  applyEnv(cfg);
+  const file = path.resolve(String(args.file ?? ''));
+  if (!fs.existsSync(file)) throw new InputError('视频文件不存在');
+  const { probeVideo } = await import('dsh-video-storyboard/probe');
+  const info = await probeVideo(file);
+  const duration = Number(info?.duration) || 0;
+  if (!duration) throw new InputError('读不出视频时长，可能不是视频文件');
+
+  let from = Number.isFinite(args.from) ? Math.max(0, args.from) : 0;
+  let to = Number.isFinite(args.to) ? Math.min(duration, args.to) : null;
+  let partial = '';
+  if (to == null && duration > cfg.maxFullSeconds && from === 0) {
+    to = cfg.longWindowSeconds;
+    partial = `注意：只看了开头 ${fmtDur(to)}，全片 ${fmtDur(duration)}（说的时候别夸大）`;
+  }
+  if (to != null && to <= from) throw new InputError('to 要大于 from');
+  const detail = args.detail === 'low' ? 'low' : 'med';
+  const span = (to ?? duration) - from;
+  const sheets = sheetsFor(span, cfg);
+
+  const stat = fs.statSync(file);
+  const key = cacheKey(['file', 1, file, stat.size, stat.mtimeMs, from, to, detail]);
+  const hit = readCache(key, cfg.cacheHours);
+  if (hit) return { ...hit, cached: true, duration };
+  if (overHourly(cfg.maxPerHour)) throw new InputError(`这一小时已经看了 ${cfg.maxPerHour} 个视频，晚点再看`);
+
+  const result = await exclusive(() => withTimeout(runStoryboard({
+    input: file,
+    from,
+    ...(to != null ? { to } : {}),
+    cells: sheets > 1 ? 16 : cellsFor(span),
+    sheets,
+    pick: 'sharp',
+    burn: 'index',
+    transcript: 'auto',
+  }), timeoutFor(span, cfg.timeoutSeconds) * 1000));
+  recent.push(Date.now());
+  const pngs = result.sheets.map((s) => s.png);
+  const head = [
+    MATERIAL_NOTE.replace('标题、简介、字幕、评论、弹幕', '字幕和画面'),
+    `视频：${args.title || path.basename(file)} · 时长 ${fmtDur(duration)}${info?.width ? ` · ${info.width}×${info.height}` : ''}`,
+    args.note || '',
+  ].filter(Boolean).join('\n');
+  const intro = `画面与台词：上面${sheets > 1 ? ` ${sheets} 张分镜图按时间先后排，格号连续` : '那张分镜图按格编号'}（编号烧在图上），下面是每格的时间和台词。`;
+  const room = Math.max(400, cfg.textBudget + 1000 * (sheets - 1) - head.length - partial.length - intro.length);
+  const text = [head, `${intro}\n${fitCells(result, room, DETAIL_CHARS[detail])}`, partial].filter(Boolean).join('\n\n');
+  writeCache(key, text, pngs);
+  log(`看了本机视频 ${path.basename(file)}（${fmtDur(duration)}，${sheets} 张图）`);
+  return { text, pngs, cached: false, duration };
+}
+
 // ── 站内搜索 ──────────────────────────────────────────────────────────────
 export const FIND_ORDERS = { relevance: 'totalrank', views: 'click', newest: 'pubdate', danmaku: 'dm', favorites: 'stow' };
 const ORDER_TEXT = { relevance: '综合排序', views: '最多播放', newest: '最新发布', danmaku: '最多弹幕', favorites: '最多收藏' };
