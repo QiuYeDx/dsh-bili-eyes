@@ -14,6 +14,7 @@ import { BiliError } from './bili-api.js';
 import { bindHost, gateKind } from './gate.js';
 import { loadInbox } from './inbox.js';
 import { pollAutoSurf } from './auto-surf.js';
+import { pollGuard } from './guard.js';
 
 export const name = 'dsh-bili-eyes';
 export const inject = ['tools', 'attachments'];
@@ -285,14 +286,18 @@ export async function apply(ctx) {
     try { ctx?.logger?.error?.(`[dsh-bili-eyes] 加载失败：${e?.stack ?? e}`); } catch { /* 忽略 */ }
     if (process.env.DSH_BILI_EYES_DEBUG) throw e;
   }
-  // 收件箱：每 30 秒看一眼要不要查（开关、间隔、安静时段在 pollInbox 里判断）
-  const timer = setInterval(() => { pollInbox({ log }).catch(() => {}); }, 30_000);
+  // 收件箱：每 10 秒看一眼要不要查（开关、间隔、安静时段在 pollInbox 里判断；真正的请求按 inboxPollSeconds）
+  const timer = setInterval(() => { pollInbox({ log, getAsk: askNow }).catch(() => {}); }, 10_000);
   timer.unref?.();
+  // 守评论区：每 30 秒看一眼（开关、间隔在 pollGuard 里判断）
+  const guardTimer = setInterval(() => { pollGuard({ getAsk: askNow, log }).catch((e) => log(`守评论区出错：${e?.message ?? e}`)); }, 30_000);
+  guardTimer.unref?.();
   // 自己逛：每分钟看一眼时间表（开关、时间段、次数在 pollAutoSurf 里判断）
   const autoTimer = setInterval(() => { pollAutoSurf({ ask: askNow, log }).catch((e) => log(`自己逛出错：${e?.message ?? e}`)); }, 60_000);
   autoTimer.unref?.();
   return () => {
     clearInterval(timer);
+    clearInterval(guardTimer);
     clearInterval(autoTimer);
     unbindHost();
     for (const d of disposers) { try { d?.(); } catch { /* 忽略 */ } }

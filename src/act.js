@@ -311,16 +311,20 @@ async function perform(client, d, cfg) {
 
 /**
  * 写操作的入口。
- * @param {object} req {kind, payload, preview, target}：payload 是发请求要的参数，preview 是给人看的一句话，target 记进审计
+ * @param {object} req {kind, payload, preview, target}：payload 是发请求要的参数，preview 是给人看的一句话，target 记进审计。
+ *   评论引擎（engine.js）还会带上自己的规矩，覆盖默认的：
+ *   modeKey 用哪个档位（比如 guardMode）、modeLabel 它在设置页叫什么；
+ *   quota {max, count(entries, now), label} 单独的额度；maxPerParent 同一条评论最多回几次；gapSeconds 两次至少隔多久
  * @param {object} o {cfg, client, sessionId, via:'tool'|'ui', draftsFile, auditFile, now}
  * @returns {Promise<{status:'sent'|'draft'|'refused'|'failed', text:string, draft?:object}>}
  */
 export async function request(req, { cfg, client, sessionId = '', session = null, approve = null, via = 'tool', draftsFile = DRAFTS_FILE, auditFile = ACTIONS_FILE, now = Date.now(), gateOpts } = {}) {
   const { kind } = req;
-  let mode = cfg[MODE_KEY[kind]];
+  const modeKey = req.modeKey ?? MODE_KEY[kind];
+  let mode = cfg[modeKey];
   if (kind === 'unfollow' && mode === 'auto') mode = 'approve';   // 取关永远先问主人
   const refuse = (why) => { audit({ kind, status: 'refused', target: req.target, text: req.payload?.text, error: why }, auditFile); return { status: 'refused', text: `${NOT_DONE[kind]}：${why}` }; };
-  if (mode === 'off') return refuse(`主人没开「${KIND_TEXT[kind]}」（设置页 → 互动）`);
+  if (mode === 'off') return refuse(`主人没开「${req.modeLabel ?? KIND_TEXT[kind]}」（设置页 → 互动）`);
   if (cfg.writePaused) return refuse('主人在设置页按了「全部停下」');
   const drafts = loadDrafts(draftsFile);
   if (drafts.pausedUntil > now) return refuse(`${drafts.pauseReason || '刚才被 B站风控拦过'}，写操作暂停到 ${new Date(drafts.pausedUntil).toLocaleTimeString()}`);
@@ -329,11 +333,12 @@ export async function request(req, { cfg, client, sessionId = '', session = null
   const entries = readAudit(2000, auditFile);
   if (kind === 'unfollow' && !req.own) return refuse('只能取关她自己关注的人（号上原来就有的关注不能动）');
   if (kind === 'unfav' && !req.own) return refuse('只能取消她自己收藏的视频（账号里原来就有的收藏不能动）');
-  const quota = FOLLOW.has(kind) ? Math.min(FOLLOW_HARD_CAP, cfg[QUOTA_KEY[kind]]) : cfg[QUOTA_KEY[kind]];
-  const used = todayCounts(entries, now)[kind] ?? 0;
-  if (used >= quota) return refuse(`今天的「${KIND_TEXT[kind]}」额度用完了（${used}/${quota}）`);
+  const quota = req.quota ? req.quota.max : FOLLOW.has(kind) ? Math.min(FOLLOW_HARD_CAP, cfg[QUOTA_KEY[kind]]) : cfg[QUOTA_KEY[kind]];
+  const used = req.quota ? req.quota.count(entries, now) : (todayCounts(entries, now)[kind] ?? 0);
+  if (used >= quota) return refuse(`今天的「${req.quota?.label ?? KIND_TEXT[kind]}」额度用完了（${used}/${quota}）`);
   if (kind === 'comment' && entries.some((e) => e.kind === 'comment' && SENT.has(e.status) && e.target?.oid === String(req.payload.oid))) return refuse('这个视频下面我已经评论过了（同一个视频只发一条顶层评论）');
-  if (kind === 'reply' && entries.filter((e) => e.kind === 'reply' && SENT.has(e.status) && e.target?.parent === String(req.payload.parent)).length >= 2) return refuse('这条评论我已经回过两次了');
+  const perParent = req.maxPerParent ?? 2;
+  if (kind === 'reply' && entries.filter((e) => e.kind === 'reply' && SENT.has(e.status) && e.target?.parent === String(req.payload.parent)).length >= perParent) return refuse(`这条评论我已经回过${perParent === 2 ? '两' : ` ${perParent} `}次了`);
   const pendingSame = drafts.list.find((x) => x.status === 'pending' && x.kind === kind && JSON.stringify(x.payload) === JSON.stringify(req.payload));
   if (pendingSame) return { status: 'draft', draft: pendingSame, text: `这条已经起草过了（#${pendingSame.id}），还在等主人同意。` };
 
@@ -342,7 +347,7 @@ export async function request(req, { cfg, client, sessionId = '', session = null
   // 关注「直接发」只对她最近真看过的 UP 主：就算会话可信，这一轮也可能是逛的时候被评论带偏的
   const autoOk = mode === 'auto' && (kind !== 'follow' || req.watched || via === 'ui');
   if (autoOk && (ctx.trusted || via === 'ui')) {
-    return send({ kind, payload: req.payload, preview: req.preview, target: req.target }, { cfg, client, entries, now, auditFile, draftsFile, how: via === 'ui' ? 'ui' : 'auto' });
+    return send({ kind, payload: req.payload, preview: req.preview, target: req.target, gapSeconds: req.gapSeconds }, { cfg, client, entries, now, auditFile, draftsFile, how: via === 'ui' ? 'ui' : 'auto' });
   }
   // 主人刚刚自己要她做这件事（「在 b站关注我一下」「帮我点个赞」）：这句话本身就是同意，不用再问一遍。
   // 只认门卫给的主人原话（群友说的不算），5 分钟内、不是问句、没有否定、点名了这类操作。
@@ -362,7 +367,7 @@ export async function request(req, { cfg, client, sessionId = '', session = null
     // 'cancelled' / 'unavailable'（没有窗口能弹卡片）：照常起草
   }
   // 起草
-  const draft = { id: drafts.next, kind, payload: req.payload, preview: req.preview, target: req.target, createdAt: now, sessionId: String(sessionId), where: ctx.label, status: 'pending' };
+  const draft = { id: drafts.next, kind, payload: req.payload, preview: req.preview, target: req.target, createdAt: now, sessionId: String(sessionId), where: ctx.label, status: 'pending', ...(req.modeKey ? { modeKey: req.modeKey, modeLabel: req.modeLabel } : {}), ...(req.gapSeconds ? { gapSeconds: req.gapSeconds } : {}) };
   drafts.next += 1;
   drafts.list.push(draft);
   saveDrafts(drafts, draftsFile);
@@ -376,14 +381,14 @@ export async function request(req, { cfg, client, sessionId = '', session = null
 
 /** 发出（不再检查档位和可信，只检查间隔和风控）。 */
 async function send(d, { cfg, client, entries = readAudit(2000), now = Date.now(), auditFile = ACTIONS_FILE, draftsFile = DRAFTS_FILE, how = 'auto', draftId = null }) {
-  const gap = LIGHT.has(d.kind) || (FOLLOW.has(d.kind) && how === 'ui') ? 5 : cfg.writeGapSeconds;
+  const gap = LIGHT.has(d.kind) || (FOLLOW.has(d.kind) && how === 'ui') ? 5 : (d.gapSeconds ?? cfg.writeGapSeconds);
   const last = entries.find((e) => e.status === 'ok' && (LIGHT.has(d.kind) || !LIGHT.has(e.kind)));
   // 关注之间另有 10 分钟间隔；主人在设置页手动取关不受它限制
   const lastFollow = FOLLOW.has(d.kind) && how !== 'ui' ? entries.find((e) => FOLLOW.has(e.kind) && SENT.has(e.status)) : null;
   const waitFor = (e, g) => (e && now - e.at < g * 1000 ? Math.ceil((g * 1000 - (now - e.at)) / 1000) : 0);
   const wait = Math.max(waitFor(last, gap), waitFor(lastFollow, FOLLOW_GAP_S));
   if (wait > 0) {
-    return { status: 'refused', text: `${NOT_DONE[d.kind]}：离上一次${waitFor(lastFollow, FOLLOW_GAP_S) ? '关注' : '写操作'}太近，${wait} 秒后再试${draftId ? `（草稿 #${draftId} 还留着）` : ''}` };
+    return { status: 'refused', wait, text: `${NOT_DONE[d.kind]}：离上一次${waitFor(lastFollow, FOLLOW_GAP_S) ? '关注' : '写操作'}太近，${wait} 秒后再试${draftId ? `（草稿 #${draftId} 还留着）` : ''}` };
   }
   try {
     const r = await perform(client, d, cfg);
@@ -482,7 +487,7 @@ export async function confirm(draftId, decision, { cfg, client, sessionId = '', 
     return { status: 'refused', text: `草稿 #${d.id} 丢掉了` };
   }
   if (cfg.writePaused) return { status: 'refused', text: `${NOT_DONE[d.kind]}：主人在设置页按了「全部停下」` };
-  if (cfg[MODE_KEY[d.kind]] === 'off') return { status: 'refused', text: `${NOT_DONE[d.kind]}：主人把「${KIND_TEXT[d.kind]}」关了` };
+  if (cfg[d.modeKey ?? MODE_KEY[d.kind]] === 'off') return { status: 'refused', text: `${NOT_DONE[d.kind]}：主人把「${d.modeLabel ?? KIND_TEXT[d.kind]}」关了` };
   if (drafts.pausedUntil > now) return { status: 'refused', text: `${NOT_DONE[d.kind]}：写操作暂停到 ${new Date(drafts.pausedUntil).toLocaleTimeString()}（${drafts.pauseReason || '刚被风控拦过'}）` };
   let how = 'ui';
   if (via !== 'ui') {

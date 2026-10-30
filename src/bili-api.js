@@ -362,6 +362,19 @@ export class BiliClient {
   }
 
   // ── 收件箱 ────────────────────────────────────────────────────────────
+  /**
+   * 未读数（很轻）：{reply, at, dm}。插件不会把消息标成已读，所以这里只用来看「数字变没变」。
+   * 私信那个接口失败时 dm 记成 null（不影响回复和 @）。
+   */
+  async unread() {
+    const d = await this.request('https://api.bilibili.com/x/msgfeed/unread?build=0&mobi_app=web');
+    let dm = null;
+    try {
+      const s = await this.request('https://api.vc.bilibili.com/session_svr/v1/session_svr/single_unread?unread_type=0&show_unfollow_list=1&show_dustbin=1&build=0&mobi_app=web');
+      dm = (Number(s?.follow_unread) || 0) + (Number(s?.unfollow_unread) || 0);
+    } catch { dm = null; }
+    return { reply: Number(d?.reply) || 0, at: Number(d?.at) || 0, dm };
+  }
   /** 回复我的（最新在前）。 */
   replyFeed() { return this.request('https://api.bilibili.com/x/msgfeed/reply?platform=web&build=0&mobi_app=web'); }
   /** @ 我的（最新在前）。 */

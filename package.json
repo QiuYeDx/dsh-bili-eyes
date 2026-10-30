@@ -52,7 +52,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test/unit.test.mjs test/contract.test.mjs test/settings.test.mjs test/interact.test.mjs test/surf-agent.test.mjs test/auto-surf.test.mjs test/dsh-qq.test.mjs test/asr-config.test.mjs",
+    "test": "node --test test/unit.test.mjs test/contract.test.mjs test/settings.test.mjs test/interact.test.mjs test/surf-agent.test.mjs test/auto-surf.test.mjs test/dsh-qq.test.mjs test/asr-config.test.mjs test/engine.test.mjs",
     "login": "node bin/cli.mjs login",
     "status": "node bin/cli.mjs status",
     "preview": "node dev/preview.mjs"

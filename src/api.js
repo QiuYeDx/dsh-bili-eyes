@@ -22,6 +22,8 @@ import { loadDrafts, readAudit, todayCounts, confirm, deleteSent, deletedIds, vi
 import { sessionContext, gateKind, hello, recentJudgments } from './gate.js';
 import { ALL_TOOLS } from './tool-list.js';
 import { checkBridge } from './adapters/dsh-qq.js';
+import { loadEngine, saveEngine, engineLock, engineCount, ACTION_TEXT, CATS } from './engine.js';
+import { pollGuard, videoList, togglePatch } from './guard.js';
 import { asrView, saveAsr, clearAsr, testAsr } from './asr-config.js';
 import { patchStatus, applyPatches } from './adapters/dsh-qq-patch.js';
 import { mediaBins, mediaDirOf, resetFfmpegCheck } from './media.js';
@@ -236,6 +238,31 @@ async function getView(view, ctx, q = new URLSearchParams()) {
     const limit = limitOf(q);
     return { items: all.slice(0, limit), total: all.length, open: st.items.filter(isOpen).length, lastCheck: st.lastCheck, lastError: st.lastError, started: Boolean(st.baseline), on: cfg.inboxOn, gate: gateKind(cfg) !== 'builtin' };
   }
+  if (view === 'guard') {
+    const st = loadEngine();
+    const source = pick(q, 'source', ['guard', 'inbox']);
+    const action = pick(q, 'action', Object.keys(ACTION_TEXT));
+    const from = daysSince(q);
+    const all = [...st.decisions].reverse().filter((d) => d.at >= from && (!source || d.source === source) && (!action || d.action === action));
+    const limit = limitOf(q);
+    return {
+      mode: cfg.guardMode,
+      inboxMode: cfg.inboxReplyMode,
+      ownerMid: cfg.ownerMid,
+      videos: videoList(cfg, st).map((v) => ({ ...v, note: st.notes[v.bvid] ?? '' })),
+      videosAt: st.guard.videosAt,
+      lastPoll: st.guard.lastPoll,
+      lastError: st.guard.lastError,
+      pending: st.guard.pending.length,
+      today: engineCount(readAudit(2000)),
+      perDay: cfg.engQuotaShared ? cfg.replyPerDay : cfg.engPerDay,
+      items: all.slice(0, limit),
+      total: all.length,
+      actionText: ACTION_TEXT,
+      cats: CATS,
+      gate: gateKind(cfg) !== 'builtin',
+    };
+  }
   if (view === 'act') {
     const entries = readAudit(500);
     const drafts = loadDrafts();
@@ -352,7 +379,20 @@ async function postAction(body, ctx) {
       const r = await surf({ direction: body.direction ?? '' }, { source: 'ui', ask: ctx.ask?.() ?? null });
       return { text: r.text, items: r.items ?? [], ms: Date.now() - t, model: Boolean(ctx.ask?.()), mode: r.meta?.mode ?? 'quick', steps: r.meta?.steps ?? 0 };
     }
-    case 'inboxCheck': return pollInbox({ force: true });
+    case 'inboxCheck': return pollInbox({ force: true, getAsk: ctx.ask, log: ctx.log });
+    case 'guardNow': return pollGuard({ force: true, getAsk: ctx.ask, log: ctx.log });
+    case 'guardToggle': {
+      const bvid = String(body.bvid ?? '');
+      if (!/^BV[0-9A-Za-z]{10}$/.test(bvid)) throw new InputError('BV 号不对');
+      return { config: saveConfig(togglePatch(cfg, loadEngine(), bvid, body.watch === true)) };
+    }
+    case 'guardNote': {
+      const bvid = String(body.bvid ?? '');
+      if (!/^BV[0-9A-Za-z]{10}$/.test(bvid)) throw new InputError('BV 号不对');
+      const text = String(body.text ?? '').trim();
+      if (text.length > 1000) throw new InputError('问答备忘最多 1000 个字');
+      return engineLock(() => { const st = loadEngine(); if (text) st.notes[bvid] = text; else delete st.notes[bvid]; saveEngine(st); return { ok: true }; });
+    }
     case 'autoSurfNow': return { run: await autoSurfNow({ ask: ctx.ask?.() ?? null, log: ctx.log }) };
     case 'inboxMark': {
       const st = loadInbox();

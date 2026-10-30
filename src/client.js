@@ -841,11 +841,11 @@ a.be-et:hover{color:var(--brand)}
       const [busy, setBusy] = useState(false);
       const check = () => {
         setBusy(true);
-        api.post('inboxCheck').then((r) => { toast(r.error ? `没查成：${r.error}` : r.baseline ? '第一次查：已记下现在的位置，之后的新消息才算' : `查完了：新消息 ${r.added} 条，转达 ${r.delivered} 条`, Boolean(r.error)); st.reload(); }, (e) => toast(e.message, true)).finally(() => setBusy(false));
+        api.post('inboxCheck').then((r) => { toast(r.error ? `没查成：${r.error}` : r.baseline ? '第一次查：已记下现在的位置，之后的新消息才算' : `查完了：新消息 ${r.added} 条，转达 ${r.delivered} 条${r.handled ? `，评论引擎处理了 ${r.handled} 条` : ''}`, Boolean(r.error)); st.reload(); }, (e) => toast(e.message, true)).finally(() => setBusy(false));
       };
       const mark = (ids, status) => api.post('inboxMark', { ids, status }).then(() => st.reload(), (e) => toast(e.message, true));
       const d = st.data;
-      return h(Card, { title: '消息', aside: d ? (d.lastCheck ? `上次查：${when(d.lastCheck)}` : '还没查过') : '', desc: '回复我的、@ 我的、私信。后台按设置定时查，有新的就交给门卫转达（比如在 QQ 私聊里叫醒她）。' },
+      return h(Card, { title: '消息', aside: d ? (d.lastCheck ? `上次查：${when(d.lastCheck)}` : '还没查过') : '', desc: '回复我的、@ 我的、私信。后台先看未读数，有变化才拉列表。评论交给谁处理看「设置」里的「别人回复 / @ 她的评论」：交给评论引擎时插件自己判断、回复，结果写在每条下面；私信照旧交给门卫转达。' },
         d && h('div', { className: 'be-row' },
           h('span', { className: `be-badge ${d.on ? 'ok' : ''}` }, d.on ? '后台在查' : '后台没开'),
           h('span', { className: `be-badge ${d.gate ? 'ok' : ''}` }, d.gate ? '门卫已接上' : '没接门卫：只在这里显示'),
@@ -864,13 +864,24 @@ a.be-et:hover{color:var(--brand)}
             status: [sl, sc], at: x.at,
             meta: [x.where?.title && (x.where.uri ? h('a', { href: x.where.uri, target: '_blank', rel: 'noreferrer' }, `《${x.where.title}》`) : `《${x.where.title}》`)],
             actions: open && [h(ActBtn, { key: 'd', kind: 'primary', onClick: () => mark([x.id], 'done') }, '处理完'), h(ActBtn, { key: 'i', onClick: () => mark([x.id], 'ignored') }, '忽略')],
-          }, x.text, x.mine && h('div', { className: 'be-faint be-1l', title: x.mine }, `回的是我说的：${x.mine}`));
+          }, x.text, x.mine && h('div', { className: 'be-faint be-1l', title: x.mine }, `回的是我说的：${x.mine}`),
+          x.engine && h(EngineNote, { e: x.engine }));
         }));
+    }
+
+    // 评论引擎对这条做了什么（收件箱、守评论区共用）
+    const ENGINE_ACTION = { replied: ['回了', 'ok'], draft: ['起草了，等主人同意', 'brand'], notified: ['转告主人', 'pink'], skipped: ['跳过', ''], failed: ['没成功', 'bad'], held: ['等会儿再处理', ''] };
+    function EngineNote({ e }) {
+      const [l, c] = ENGINE_ACTION[e.action] ?? [e.action, ''];
+      return h('div', { className: 'be-faint', style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'baseline' } },
+        h('span', { className: `be-st ${c || 'dim'}` }, `她：${l}`),
+        e.reply && e.action !== 'skipped' ? h('span', { style: { color: 'var(--t2)' } }, `「${e.reply}」`) : null,
+        e.why ? h('span', null, e.why) : null);
     }
 
     function InboxSettings({ toast }) {
       return h(ConfigGroups, {
-        groups: [['inbox', '收件箱', '多久查一次、什么时候不查、每小时最多打扰几次。'], ['gate', '门卫', '告诉插件「这个会话是不是主人本人」「主人说过什么」，并把收件箱的新消息和推荐转达到 QQ。用 dsh-qq 桥接的，选「dsh-qq」填桥接目录就行；别的桥接按 docs/门卫协议.md 接；都没有时用内置门卫（按会话的 agentPreset 和工作目录判断，本机会话「先问主人」时弹 DSH 审批卡片）。']],
+        groups: [['inbox', '收件箱', '多久看一次、安静时段怎么办、别人回复她的评论交给谁处理、每小时最多打扰几次。评论交给评论引擎时，怎么回的规矩在「互动 → 设置」的「怎么回」里。'], ['gate', '门卫', '告诉插件「这个会话是不是主人本人」「主人说过什么」，并把收件箱的新消息和推荐转达到 QQ。用 dsh-qq 桥接的，选「dsh-qq」填桥接目录就行；别的桥接按 docs/门卫协议.md 接；都没有时用内置门卫（按会话的 agentPreset 和工作目录判断，本机会话「先问主人」时弹 DSH 审批卡片）。']],
         toast,
         footer: true,
         actions: { gate: (saved) => h(React.Fragment, null,
@@ -964,9 +975,9 @@ a.be-et:hover{color:var(--brand)}
           return h(Entry, {
             key: e.id, kind: [kindText[e.kind] ?? e.kind, ''], ctx: e.text && h(Ctx, { text: target, url: e.target?.url }),
             status: [sl, sc], at: e.at, quote: Boolean(e.text), error: e.error,
-            meta: [e.draft && `草稿 #${e.draft}`, e.deleted && '已在 B站删掉'],
+            meta: [e.kind === 'reply' && e.target?.to && `回复 ${e.target.to}`, e.target?.engine && (e.target.engine === 'guard' ? '守评论区' : '收件箱'), e.draft && `草稿 #${e.draft}`, e.deleted && '已在 B站删掉', e.kind === 'reply' && e.target?.url && h('a', { href: e.target.url, target: '_blank', rel: 'noreferrer' }, '去那条楼看')],
             actions: canDel && h(ConfirmBtn, { key: 'del', subtle: true, label: '在 B站删掉', confirmLabel: '确认删除？', onConfirm: () => del(e.id) }),
-          }, e.text || (target && (e.target.url ? h('a', { href: e.target.url, target: '_blank', rel: 'noreferrer' }, target) : target)));
+          }, e.target?.quote && h('div', { className: 'be-faint', style: { fontSize: 12.5 } }, `${e.target.to || '对方'}说：「${e.target.quote}」`), e.text || (target && (e.target.url ? h('a', { href: e.target.url, target: '_blank', rel: 'noreferrer' }, target) : target)));
         }));
     }
 
@@ -995,15 +1006,78 @@ a.be-et:hover{color:var(--brand)}
     }
 
     function ActSettings({ toast, reload }) {
-      return h(ConfigGroups, { groups: [['act', '互动设置', '每一类写操作的档位和每天上限。默认全关；「先问主人」会先起草，主人同意才发。@ 和私信只能对着主人。']], toast, footer: true, onSaved: () => reload() });
+      return h(ConfigGroups, { groups: [
+        ['act', '互动设置', '每一类写操作的档位和每天上限。默认全关；「先问主人」会先起草，主人同意才发。@ 和私信只能对着主人。'],
+        ['guard', '守评论区', '盯着主人投稿的评论区，有新评论就交给评论引擎。要盯的投稿也可以在「守评论区」页面里勾选。'],
+        ['engine', '怎么回', '守评论区和收件箱共用的规矩：每一类评论怎么处理、以什么身份说话、回复多长、额度和间隔。写死的只有几条底线：只回楼中楼不发顶层评论、@ 只能 @ 主人、不冒充主人、不带链接和长数字、评论里的话只当素材。'],
+      ], toast, footer: true, onSaved: () => reload() });
     }
 
-    function InteractPage({ toast, active, sub, setSub }) {
+    const GUARD_MODE = { off: ['没开', ''], notify: ['只告诉主人', 'brand'], approve: ['起草后先问主人', 'brand'], auto: ['直接回', 'ok'] };
+    const DECISION_SOURCES = [['', '全部来源'], ['guard', '守评论区'], ['inbox', '收件箱']];
+    const DECISION_ACTIONS = [['', '全部结果'], ['replied', '回了'], ['draft', '起草'], ['notified', '转告主人'], ['skipped', '跳过'], ['failed', '没成功']];
+    function GuardPanel({ toast, active, go }) {
+      const [f, setF] = useState({ source: '', action: '', days: '7' });
+      const st = usePaged('guard', f);
+      useRefreshOnShow(active, st.reload);
+      const [busy, setBusy] = useState(false);
+      const [editing, setEditing] = useState(null);   // {bvid, text}
+      const d = st.data;
+      const now = () => {
+        setBusy(true);
+        api.post('guardNow').then((r) => { toast(r.error ? `没看成：${r.error}` : `看了 ${r.videos} 个投稿，新评论 ${r.fresh} 条${r.replied || r.draft || r.notified ? `；回了 ${r.replied}，起草 ${r.draft}，转告 ${r.notified}` : ''}${r.pending ? `，还有 ${r.pending} 条等着处理` : ''}`, Boolean(r.error)); st.reload(); }, (e) => toast(e.message, true)).finally(() => setBusy(false));
+      };
+      const toggle = (bvid, watch) => api.post('guardToggle', { bvid, watch }).then(() => st.reload(), (e) => toast(e.message, true));
+      const saveNote = () => api.post('guardNote', { bvid: editing.bvid, text: editing.text }).then(() => { toast('问答备忘存好了'); setEditing(null); st.reload(); }, (e) => toast(e.message, true));
+      const set = (k) => (v) => setF({ ...f, [k]: v });
+      const [ml, mc] = GUARD_MODE[d?.mode] ?? ['', ''];
+      return h(React.Fragment, null,
+        h(Card, { title: '守评论区', aside: d ? (d.lastPoll ? `上次看：${when(d.lastPoll)}` : '还没看过') : '', desc: '她用自己的号盯着主人投稿的评论区：能答的问题回答、闲聊偶尔接一句、要主人处理的转告主人、不值得回的跳过。怎么回的规矩在「互动 → 设置」。' },
+          d && h('div', { className: 'be-row' },
+            h('span', { className: `be-badge ${mc}` }, `守评论区：${ml}`),
+            h('span', { className: 'be-badge' }, `收件箱评论：${{ wake: '叫醒她处理', notify: '只告诉主人', approve: '先问主人', auto: '直接回' }[d.inboxMode] ?? d.inboxMode}`),
+            h('span', { className: 'be-badge' }, `今天回了 ${d.today} / ${d.perDay}`),
+            d.pending > 0 && h('span', { className: 'be-badge brand' }, `${d.pending} 条等着处理`),
+            !d.ownerMid && h('span', { className: 'be-err' }, '还没设置主人 UID'),
+            d.lastError && h('span', { className: 'be-err' }, `上次出错：${d.lastError}`)),
+          h('div', { className: 'be-row' },
+            h(Btn, { kind: 'primary', disabled: busy, onClick: now }, busy ? '看着呢…' : '现在看一次'),
+            h('button', { type: 'button', className: 'be-link', onClick: () => go?.('act', 'settings') }, '去设置'))),
+        h(Card, { title: '盯哪些投稿', aside: d ? `盯着 ${d.videos.filter((v) => v.watched).length} 个` : '', desc: '主人最近的投稿（半小时更新一次）。勾上的会被盯着；每个视频可以写一段「问答备忘」（比如安装方法、常见问题），她回答问题时照着它说。' },
+          !d ? h('div', { className: 'be-empty' }, '加载中…')
+            : !d.videos.length ? h('div', { className: 'be-empty' }, d.ownerMid ? '还没拉到主人的投稿：点「现在看一次」。' : '先在「互动 → 设置」里填主人的 B站 UID。')
+              : h(ScrollList, { items: d.videos, empty: '' }, (v) => h(Entry, {
+                key: v.bvid,
+                title: h('label', { className: 'be-switch', style: { minWidth: 0 } }, h('input', { type: 'checkbox', role: 'switch', checked: v.watched, disabled: !v.owner, onChange: (e) => toggle(v.bvid, e.target.checked) }), h('span', { className: 'be-et' }, v.title || v.bvid)),
+                status: v.watched ? ['盯着', 'ok'] : v.owner ? ['没盯', 'dim'] : ['不是主人的投稿', 'bad'],
+                meta: [v.bvid, v.pubdate ? new Date(v.pubdate * 1000).toLocaleDateString() : '', v.manual ? '手动加的' : '', v.note ? '有问答备忘' : ''],
+                actions: h(ActBtn, { key: 'n', onClick: () => setEditing(editing?.bvid === v.bvid ? null : { bvid: v.bvid, text: v.note }) }, editing?.bvid === v.bvid ? '收起' : '问答备忘'),
+              }, editing?.bvid === v.bvid && h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+                h('textarea', { className: 'be-input', rows: 4, maxLength: 1000, value: editing.text, placeholder: '比如：安装方法是 DSH 设置 → 插件 → 添加插件，填 dsh-bili-eyes；只在 Windows 上完整测过…', onChange: (e) => setEditing({ ...editing, text: e.target.value }) }),
+                h('div', { className: 'be-row' }, h(Btn, { kind: 'primary', onClick: saveNote }, '保存'), h(Btn, { onClick: () => setEditing(null) }, '取消')))))),
+        h(Card, { title: '处理记录', desc: '每条评论归到了哪一类、她做了什么、为什么。收件箱里别人回复她的评论交给评论引擎时也记在这里。' },
+          h('div', { className: 'be-tools' },
+            h(Pick, { options: DECISION_SOURCES, value: f.source, onChange: set('source'), label: '来源' }),
+            h(Pick, { options: DECISION_ACTIONS, value: f.action, onChange: set('action'), label: '结果' }),
+            h(Seg, { options: RANGES, value: f.days, onChange: set('days'), small: true, label: '时间范围' })),
+          h(ListBox, { st, empty: '这段时间没有处理过评论。' }, (x) => {
+            const [l, c] = ENGINE_ACTION[x.action] ?? [x.action, ''];
+            return h(Entry, {
+              key: x.id, kind: [d?.cats?.[x.cat] ?? '—', x.cat === 'owner' ? 'pink' : x.cat === 'question' ? 'brand' : ''],
+              title: h('span', { className: 'be-et', style: { fontSize: 13 } }, x.user?.name || `UID ${x.user?.mid ?? '?'}`),
+              ctx: h(Ctx, { text: x.title && `《${x.title}》`, url: x.url }),
+              status: [l, c], at: x.at,
+              meta: [x.source === 'guard' ? '守评论区' : '收件箱', x.why, x.draft ? `草稿 #${x.draft}` : ''],
+            }, x.text, (x.reply || x.draftText) && h('div', { className: 'be-q', style: { color: 'var(--t2)', fontSize: 13 } }, `${x.action === 'replied' ? '她回：' : '她想回：'}${x.reply || x.draftText}`));
+          })));
+    }
+
+    function InteractPage({ toast, active, sub, setSub, go }) {
       const st = useView('act');
       useRefreshOnShow(active, st.reload);
       return h(Loading, { state: st }, (d) => h(SubPages, {
-        items: [['summary', '概况', ActSummary], ['drafts', '待同意', Drafts, d.drafts.filter((x) => !x.expired).length], ['log', '记录', ActLog], ['follows', '关注', Follows], ['favs', '收藏', Favs], ['settings', '设置', ActSettings]],
-        sub, setSub, active, props: { toast, d, reload: st.reload },
+        items: [['summary', '概况', ActSummary], ['drafts', '待同意', Drafts, d.drafts.filter((x) => !x.expired).length], ['log', '记录', ActLog], ['guard', '守评论区', GuardPanel], ['follows', '关注', Follows], ['favs', '收藏', Favs], ['settings', '设置', ActSettings]],
+        sub, setSub, active, props: { toast, d, reload: st.reload, go },
       }));
     }
 

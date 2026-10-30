@@ -48,11 +48,39 @@ export const DEFAULTS = Object.freeze({
   autoSurfRecommend: 'notify', // 想推荐给主人时怎么说：notify 门卫转达 / comment 评论里 @ 主人 / dm B站私信，可多选（逗号分隔）
   autoSurfVoice: '',       // 她说话的样子（自己写评论和推荐语时用）
   // 收件箱
-  inboxOn: false,          // 后台轮询「回复我的 / @ 我的 / 私信」
-  inboxIntervalSeconds: 180,
-  inboxQuiet: '00:30-07:30', // 这个时段不查（空 = 全天查）
+  inboxOn: false,          // 后台查「回复我的 / @ 我的 / 私信」
+  inboxPollSeconds: 60,    // 多久看一次未读数（很轻的请求；数字变了才拉完整列表）
+  inboxIntervalSeconds: 600, // 未读数没变时，多久也完整查一次（兜底）
+  inboxQuiet: '00:30-07:30', // 安静时段（空 = 没有）
+  inboxQuietMode: 'hold',  // 安静时段里：hold 照查但先攒着、时段结束再处理 / skip 不查 / normal 照常
   inboxDm: true,           // 也查私信
   inboxNotifyPerHour: 6,   // 每小时最多转达几次
+  inboxReplyMode: 'wake',  // 别人回复 / @ 她的评论：wake 叫醒她自己处理（老办法）/ notify 只告诉主人 / approve 插件起草、先问主人 / auto 插件直接回
+  inboxChatChance: 80,     // 别人接她的话（闲聊）时回的概率（%）
+  inboxReport: 'auto',     // 回完要不要告诉主人：all 都说 / auto 只说直接回了的 / none 不说
+  // 守评论区（guard.js）：盯着主人投稿的评论区，有新评论就判断、回复或转告主人
+  guardMode: 'off',        // off 关 / notify 只告诉主人 / approve 起草后先问主人 / auto 直接回
+  guardAutoNew: true,      // 主人新发的投稿自动加入
+  guardDays: 30,           // 只盯最近多少天的投稿（0 = 不限）
+  guardVideos: '',         // 另外要盯的 BV 号（老视频），逗号或换行分隔
+  guardExclude: '',        // 不盯的 BV 号
+  guardIntervalMinutes: 5, // 多久拉一次新评论
+  guardChatChance: 30,     // 闲聊、夸奖接话的概率（%）
+  guardReport: 'auto',     // 回完要不要告诉主人：all / auto / none
+  // 评论引擎（收件箱和守评论区共用，engine.js）：每一类评论怎么处理、回复的规矩和额度
+  engAnswer: 'reply',      // 能答的问题：reply 回 / notify 转告主人 / skip 跳过
+  engChat: 'reply',        // 闲聊、夸奖、接她的话：reply（按概率）/ skip
+  engOwner: 'notify',      // 要主人自己处理的（bug、合作、投诉、问主人本人）：notify / skip
+  engOwnerName: '我家主人', // 回复里怎么称呼主人
+  engIdentity: '主人家的 AI 女仆', // 她以什么身份回复（拼进提示词）
+  engMaxLen: 120,          // 回复最长几个字
+  engMaxAgeHours: 72,      // 评论超过多久就不回了
+  engRespectOwner: true,   // 主人自己回过的楼不插嘴
+  engRounds: 2,            // 同一条楼里她最多回几次
+  engQuotaShared: false,   // 额度和「每天最多回复」共用（关 = 单独一份）
+  engPerDay: 15,           // 单独一份时：每天最多回几条
+  engPerVideoHour: 3,      // 每个视频每小时最多回几条
+  engGapSeconds: 60,       // 两次回复至少隔多久
   // 互动（写操作）：off 关 / approve 先起草等主人同意 / auto 在额度内直接发
   ownerMid: 0,             // 主人的 B站 UID：@ 和私信只能对着他
   likeMode: 'off',
@@ -131,12 +159,38 @@ export const FIELDS = Object.freeze([
   { key: 'autoSurfGapMinutes', group: 'autosurf', type: 'int', min: 10, max: 720, unit: '分钟', label: '两次之间至少隔' },
   { key: 'autoSurfComment', group: 'autosurf', type: 'bool', label: '看情况自己评论', hint: '每次最多一条；还要「互动」里的「评论」档位开着，额度照算' },
   { key: 'autoSurfRecommend', group: 'autosurf', type: 'multi', options: [['notify', '门卫转达（比如 QQ 私聊）'], ['comment', 'B站评论里 @ 主人'], ['dm', 'B站私信主人']], label: '想推荐给主人时', hint: '可多选；都不选 = 不推荐。评论 @ 和私信要设置主人 UID、开着对应档位；门卫转达要接了门卫（没接就跳过）' },
-  { key: 'autoSurfVoice', group: 'autosurf', type: 'text', max: 300, multiline: true, label: '她说话的样子', hint: '自己写评论和推荐语时照着这个口吻。比如「叫小鲸鱼，说话短、爱用颜文字、有点傲娇」' },
-  { key: 'inboxOn', group: 'inbox', type: 'bool', label: '后台查收件箱', hint: '回复我的、@ 我的、私信；有新的就交给门卫转达' },
+  { key: 'autoSurfVoice', group: 'autosurf', type: 'text', max: 300, multiline: true, label: '她说话的样子', hint: '自己写评论、推荐语，以及守评论区、收件箱里回复别人时，都照着这个口吻。比如「叫小鲸鱼，说话短、爱用颜文字、有点傲娇」' },
+  { key: 'inboxOn', group: 'inbox', type: 'bool', label: '后台查收件箱', hint: '回复我的、@ 我的、私信' },
   { key: 'inboxDm', group: 'inbox', type: 'bool', label: '也查私信', hint: '只转达主人的私信；别人的只记下来' },
-  { key: 'inboxIntervalSeconds', group: 'inbox', type: 'int', min: 60, max: 3600, unit: '秒', label: '多久查一次' },
-  { key: 'inboxQuiet', group: 'inbox', type: 'text', max: 11, pattern: /^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$/, patternHint: '写成 00:30-07:30', label: '安静时段', hint: '这段时间不查，比如 00:30-07:30；留空 = 全天查' },
+  { key: 'inboxPollSeconds', group: 'inbox', type: 'int', min: 20, max: 600, unit: '秒', label: '多久看一次未读数', hint: '只是一个很轻的请求；数字变了才去拉完整列表，所以可以设得勤一点' },
+  { key: 'inboxIntervalSeconds', group: 'inbox', type: 'int', min: 60, max: 3600, unit: '秒', label: '未读数没变时也完整查一次', hint: '兜底：万一未读数没反映出来，最晚隔这么久也会查到' },
+  { key: 'inboxQuiet', group: 'inbox', type: 'text', max: 11, pattern: /^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$/, patternHint: '写成 00:30-07:30', label: '安静时段', hint: '比如 00:30-07:30（可跨午夜）；留空 = 没有安静时段' },
+  { key: 'inboxQuietMode', group: 'inbox', type: 'enum', options: [['hold', '照查，但先攒着，时段结束再处理'], ['skip', '不查'], ['normal', '照常（照样回复、转达）']], label: '安静时段里', hint: '守评论区也按这个来' },
+  { key: 'inboxReplyMode', group: 'inbox', type: 'enum', options: [['wake', '叫醒她自己处理（交给门卫转达）'], ['notify', '只告诉主人'], ['approve', '插件起草，先问主人'], ['auto', '插件直接回']], label: '别人回复 / @ 她的评论', hint: '后三种交给评论引擎：插件自己判断要不要回、怎么回（规矩在「互动 → 守评论区 → 怎么回」），不用等她被叫醒。私信不受影响，主人的私信照旧转达' },
+  { key: 'inboxChatChance', group: 'inbox', type: 'int', min: 0, max: 100, unit: '%', label: '别人接她的话时回的概率', hint: '闲聊、夸奖这类；问题和要主人处理的不受它影响' },
+  { key: 'inboxReport', group: 'inbox', type: 'enum', options: [['auto', '只说直接回了的'], ['all', '都说（含起草、跳过）'], ['none', '不说']], label: '处理完要不要告诉主人', hint: '经门卫转达（比如 QQ 私聊）；要主人处理的那些总会说' },
   { key: 'inboxNotifyPerHour', group: 'inbox', type: 'int', min: 1, max: 60, unit: '次', label: '每小时最多转达几次' },
+  { key: 'guardMode', group: 'guard', type: 'enum', options: [['off', '关'], ['notify', '只告诉主人'], ['approve', '起草后先问主人'], ['auto', '直接回']], label: '守评论区', hint: '盯着主人投稿的评论区：能答的答、闲聊的偶尔接一句、要主人处理的转告主人、不值得回的跳过。要先设置主人 UID（互动 → 设置）' },
+  { key: 'guardAutoNew', group: 'guard', type: 'bool', label: '新投稿自动加入' },
+  { key: 'guardDays', group: 'guard', type: 'int', min: 0, max: 3650, unit: '天', label: '只盯最近多少天的投稿', hint: '0 = 不限（主人最近的几十条投稿都算）；手动加的不受它限制' },
+  { key: 'guardVideos', group: 'guard', type: 'text', max: 2000, multiline: true, pattern: /^[\sBV0-9A-Za-z,，]*$/, patternHint: '只写 BV 号，用逗号或换行分开', label: '另外要盯的投稿', hint: '老视频也想盯着的，填 BV 号' },
+  { key: 'guardExclude', group: 'guard', type: 'text', max: 2000, multiline: true, pattern: /^[\sBV0-9A-Za-z,，]*$/, patternHint: '只写 BV 号，用逗号或换行分开', label: '不盯的投稿', hint: '投稿列表里取消勾选的会写到这里' },
+  { key: 'guardIntervalMinutes', group: 'guard', type: 'int', min: 1, max: 60, unit: '分钟', label: '多久拉一次新评论', hint: '主人投稿下的新评论通知发给主人的号，她收不到，只能定时去看' },
+  { key: 'guardChatChance', group: 'guard', type: 'int', min: 0, max: 100, unit: '%', label: '闲聊、夸奖接话的概率', hint: '0 = 只回问题；100 = 值得回的闲聊都回' },
+  { key: 'guardReport', group: 'guard', type: 'enum', options: [['auto', '只说直接回了的'], ['all', '都说（含起草、跳过）'], ['none', '不说']], label: '处理完要不要告诉主人', hint: '要主人处理的那些总会说' },
+  { key: 'engAnswer', group: 'engine', type: 'enum', options: [['reply', '回答'], ['notify', '转告主人'], ['skip', '跳过']], label: '能答的问题', hint: '只按视频信息和问答备忘回答；没把握时说去问问主人，并转告主人' },
+  { key: 'engChat', group: 'engine', type: 'enum', options: [['reply', '按概率接一句'], ['skip', '不回']], label: '闲聊、夸奖、接她的话' },
+  { key: 'engOwner', group: 'engine', type: 'enum', options: [['notify', '转告主人'], ['skip', '跳过']], label: '要主人处理的', hint: 'bug 反馈、合作邀约、投诉、问主人本人的事' },
+  { key: 'engOwnerName', group: 'engine', type: 'text', max: 12, label: '回复里怎么称呼主人', hint: '比如「我家主人」「UP 主」' },
+  { key: 'engIdentity', group: 'engine', type: 'text', max: 60, label: '她以什么身份回复', hint: '比如「主人家的 AI 女仆」。说话的口吻用「冲浪 → 设置」里的「她说话的样子」' },
+  { key: 'engMaxLen', group: 'engine', type: 'int', min: 20, max: 300, unit: '字', label: '回复最长' },
+  { key: 'engMaxAgeHours', group: 'engine', type: 'int', min: 1, max: 720, unit: '小时', label: '评论超过多久就不回了', hint: '太久以前的评论再去接话很怪' },
+  { key: 'engRespectOwner', group: 'engine', type: 'bool', label: '主人回过的楼不插嘴' },
+  { key: 'engRounds', group: 'engine', type: 'int', min: 1, max: 10, unit: '次', label: '同一条楼里最多回几次' },
+  { key: 'engQuotaShared', group: 'engine', type: 'bool', label: '和「每天最多回复」共用额度', hint: '关 = 单独一份，用下面的数' },
+  { key: 'engPerDay', group: 'engine', type: 'int', min: 1, max: 100, unit: '条', label: '每天最多回' },
+  { key: 'engPerVideoHour', group: 'engine', type: 'int', min: 1, max: 30, unit: '条', label: '每个视频每小时最多回' },
+  { key: 'engGapSeconds', group: 'engine', type: 'int', min: 10, max: 3600, unit: '秒', label: '两次回复至少隔' },
   { key: 'ownerMid', group: 'act', type: 'int', min: 0, max: Number.MAX_SAFE_INTEGER, label: '主人的 B站 UID', hint: '@ 和私信只能对着这个账号；0 = 没设置（不能 @、不能私信）' },
   { key: 'likeMode', group: 'act', type: 'enum', options: MODE_OPTIONS, label: '点赞、收藏' },
   { key: 'commentMode', group: 'act', type: 'enum', options: MODE_OPTIONS, label: '评论、回复' },

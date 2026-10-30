@@ -8,7 +8,8 @@ import { watchedUp } from './seen-ups.js';
 import { parseInput } from './url.js';
 import { nativeApprover } from './gate.js';
 import { ensureDevice } from './device.js';
-import { loadInbox, saveInbox, checkInbox, deliver, inQuiet, formatInbox, markItems } from './inbox.js';
+import { loadInbox, saveInbox, checkInbox, deliver, inQuiet, formatInbox, markItems, byWake } from './inbox.js';
+import { loadEngine, saveEngine, processBatch, reportLines, sendReport, engineLock } from './engine.js';
 
 // bili_comments 返回过的评论：rpid → {root, oid, user}。回复时靠它找到楼层（楼中楼的 root 不是它自己）。
 const seenComments = new Map();
@@ -203,28 +204,79 @@ export async function inboxTool(args) {
 
 // ── 收件箱轮询 ────────────────────────────────────────────────────────────
 let polling = false;
+const STATUS_AFTER = { replied: 'done', draft: 'notified', notified: 'notified', skipped: 'ignored', failed: 'ignored' };
+
+/** 收件箱条目 → 评论引擎的条目 */
+export function engineItem(x) {
+  return { key: x.id, source: 'inbox', inbox: x.id, oid: x.target.oid, type: x.target.type, root: x.target.root, parent: x.target.parent, rpid: x.target.parent, at: x.at, user: x.user, text: x.text, mine: x.mine, bvid: x.where?.bvid ?? '', title: x.where?.title ?? '', url: x.where?.uri ?? '' };
+}
+
+/** 把还没处理的回复 / @ 交给评论引擎，结果写回收件箱条目。返回处理了几条。 */
+async function handleWithEngine(st, cfg, { getAsk, now, selfMid, log, deps = {} }) {
+  const items = st.items.filter((x) => x.status === 'new' && !byWake(x, cfg)).slice(0, 12);
+  if (!items.length) return 0;
+  return engineLock(async () => {
+    const est = loadEngine();
+    const client = await (deps.writeClient ?? writeClient)(cfg);
+    const name = await ownerName(client, cfg).catch(() => '');
+    const res = await processBatch(items.map(engineItem), { cfg, ask: getAsk?.() ?? null, client, selfMid, ownerName: name, st: est, now, deps });
+    for (const r of res.results) {
+      const x = st.items.find((i) => i.id === r.key);
+      if (!x) continue;
+      x.engine = { action: r.action, why: r.why ?? '', reply: r.reply ?? '', draft: r.draft ?? null, at: now };
+      if (STATUS_AFTER[r.action]) x.status = STATUS_AFTER[r.action];
+    }
+    const lines = reportLines(res.results, cfg.inboxReport);
+    if (lines.length) await sendReport(lines, { cfg, st: est, now });
+    saveEngine(est);
+    const n = res.results.filter((r) => r.action !== 'held').length;
+    if (n) log(`收件箱：评论引擎处理了 ${n} 条`);
+    return n;
+  });
+}
+
 /**
- * 查一次并转达。force=true（设置页「现在查一次」）时不看开关、间隔和安静时段。
- * 返回 {checked, added, delivered, baseline, error?}
+ * 看一次。先看未读数（很轻），数字变了、或者到了兜底时间才拉完整列表。
+ * 安静时段按 inboxQuietMode：skip 不查 / hold 照查但先攒着 / normal 照常。
+ * force=true（设置页「现在查一次」）时不看开关、间隔和安静时段，也不攒。
+ * 返回 {checked, full, added, delivered, handled, baseline, error?}
  */
-export async function pollInbox({ force = false, cfg = loadConfig(), now = Date.now(), log = () => {} } = {}) {
+export async function pollInbox({ force = false, cfg = loadConfig(), now = Date.now(), log = () => {}, getAsk = null, deps = {} } = {}) {
   if (polling) return { checked: false, reason: '正在查' };
   const st = loadInbox();
+  const quiet = inQuiet(cfg.inboxQuiet, new Date(now));
   if (!force) {
     if (!cfg.inboxOn) return { checked: false, reason: '没开' };
-    if (inQuiet(cfg.inboxQuiet, new Date(now))) return { checked: false, reason: '安静时段' };
-    if (now - st.lastCheck < cfg.inboxIntervalSeconds * 1000) return { checked: false, reason: '还没到时间' };
+    if (quiet && cfg.inboxQuietMode === 'skip') return { checked: false, reason: '安静时段' };
+    if (now - (st.lastPoll || 0) < cfg.inboxPollSeconds * 1000) return { checked: false, reason: '还没到时间' };
   }
   const cred = loadCredential();
-  if (!cred) { st.lastCheck = now; st.lastError = 'B站没登录'; saveInbox(st); return { checked: false, error: st.lastError }; }
+  if (!cred) { st.lastPoll = now; st.lastCheck = now; st.lastError = 'B站没登录'; saveInbox(st); return { checked: false, error: st.lastError }; }
   polling = true;
   try {
-    const client = makeClient({ ...cfg, useLogin: true }).client;
-    const r = await checkInbox(client, { cfg, selfMid: Number(cred.cookies.DedeUserID) || 0, state: st, now });
-    const delivered = await deliver(st, cfg, { now });
+    const client = deps.client ?? makeClient({ ...cfg, useLogin: true }).client;
+    st.lastPoll = now;
+    const key = (u) => (u ? `${u.reply}/${u.at}/${cfg.inboxDm ? u.dm : '-'}` : null);
+    let full = force || !st.baseline || now - st.lastCheck >= cfg.inboxIntervalSeconds * 1000;
+    if (!full) {
+      const k = key(await client.unread().catch(() => null));
+      if (!k || k !== st.unread) full = true;
+    }
+    let r = { added: [], baseline: false };
+    if (full) {
+      r = await checkInbox(client, { cfg, selfMid: Number(cred.cookies.DedeUserID) || 0, state: st, now });
+      st.unread = key(await client.unread().catch(() => null));
+    }
+    const hold = quiet && cfg.inboxQuietMode === 'hold' && !force;
+    let delivered = 0; let handled = 0;
+    if (!hold) {
+      delivered = await deliver(st, cfg, { now });
+      if (cfg.inboxReplyMode !== 'wake') handled = await handleWithEngine(st, cfg, { getAsk, now, selfMid: Number(cred.cookies.DedeUserID) || 0, log, deps });
+    }
+    st.lastError = '';
     saveInbox(st);
-    if (r.added.length) log(`收件箱：新消息 ${r.added.length} 条，转达 ${delivered} 条`);
-    return { checked: true, added: r.added.length, delivered, baseline: r.baseline };
+    if (r.added.length) log(`收件箱：新消息 ${r.added.length} 条，转达 ${delivered} 条${hold ? '（安静时段，先攒着）' : ''}`);
+    return { checked: true, full, added: r.added.length, delivered, handled, hold, baseline: r.baseline };
   } catch (e) {
     st.lastCheck = now; st.lastError = clip(e?.message ?? e, 160);
     saveInbox(st);

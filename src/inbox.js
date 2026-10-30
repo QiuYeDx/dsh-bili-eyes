@@ -14,8 +14,8 @@ const KIND_TEXT = { reply: '回复', at: '@', dm: '私信' };
 export function loadInbox(file = INBOX_FILE) {
   try {
     const s = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return { baseline: s.baseline ?? null, items: Array.isArray(s.items) ? s.items : [], notifiedAt: Array.isArray(s.notifiedAt) ? s.notifiedAt : [], lastCheck: s.lastCheck ?? 0, lastError: s.lastError ?? '' };
-  } catch { return { baseline: null, items: [], notifiedAt: [], lastCheck: 0, lastError: '' }; }
+    return { baseline: s.baseline ?? null, items: Array.isArray(s.items) ? s.items : [], notifiedAt: Array.isArray(s.notifiedAt) ? s.notifiedAt : [], lastCheck: s.lastCheck ?? 0, lastPoll: s.lastPoll ?? 0, unread: s.unread ?? null, lastError: s.lastError ?? '' };
+  } catch { return { baseline: null, items: [], notifiedAt: [], lastCheck: 0, lastPoll: 0, unread: null, lastError: '' }; }
 }
 export function saveInbox(state, file = INBOX_FILE) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -133,18 +133,21 @@ export function itemLine(x) {
   return `[${x.id}] ${KIND_TEXT[x.kind]} · ${who}${where}${x.kind === 'reply' ? '回复了我' : '@ 了我'}${mine}：${x.text}`;
 }
 
-export function notifyText(items) {
-  return [`B站小号收到 ${items.length} 条新消息：`, ...items.map(itemLine), '（用 bili_inbox 看详情；要回复评论用 bili_comment 并带上 inbox 编号，回完用 bili_inbox 标记处理完）'].join('\n');
+export function notifyText(items, now = Date.now()) {
+  return [`B站小号刚收到 ${items.length} 条新消息（${new Date(now).toTimeString().slice(0, 5)}，是新消息，不是过期提醒）：`, ...items.map(itemLine), '（用 bili_inbox 看详情；要回复评论用 bili_comment 并带上 inbox 编号，回完用 bili_inbox 标记处理完）'].join('\n');
 }
+
+/** 这条要不要用老办法（叫醒她自己处理）：私信总是；评论只在「叫醒她自己处理」档位下。 */
+export const byWake = (x, cfg) => x.kind === 'dm' || cfg.inboxReplyMode === 'wake' || !x.target || x.target.oid === '0';
 
 /** 把还没转达的交给门卫；按每小时上限节流。返回转达了几条。 */
 export async function deliver(state, cfg, { now = Date.now(), notifyImpl = notify } = {}) {
   state.notifiedAt = state.notifiedAt.filter((t) => now - t < 3600_000);
-  const pending = state.items.filter((x) => x.status === 'new');
+  const pending = state.items.filter((x) => x.status === 'new' && byWake(x, cfg));
   if (!pending.length || gateKind(cfg) === 'builtin') return 0;   // 内置门卫没处转达：留着等 bili_inbox
   if (state.notifiedAt.length >= cfg.inboxNotifyPerHour) return 0;
   const batch = pending.slice(-10);
-  const ok = await notifyImpl(cfg, notifyText(batch), batch);
+  const ok = await notifyImpl(cfg, notifyText(batch, now), batch);
   if (!ok) return 0;
   state.notifiedAt.push(now);
   for (const x of batch) x.status = 'notified';

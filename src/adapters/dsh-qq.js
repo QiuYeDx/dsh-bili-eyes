@@ -16,6 +16,10 @@ const INBOX = { name: 'B站收件箱', marker: '【新消息】', fallback: '【
   '值得回的评论用 bili_comment（带 inbox 编号）回一句，像真人一样短、友善，别吵架、别聊隐私；要先问主人时，用自己的话私聊问一句，主人同意了（怎么说都行）再调用 bili_confirm。主人在 B站给你的私信，直接在这里回主人就好。',
   '处理完用 bili_inbox 标记 done，不打算理的标记 ignore。不用每条都跟主人汇报，挑有意思的说一两句。这个任务平时不定时运行。',
 ].join('\n') };
+const COMMENTS = { name: 'B站评论区', marker: '【评论区】', fallback: '【B站评论区】', base: [
+  'B站插件刚处理完评论区（主人投稿下的新评论、别人回复你的评论），结果见下面【评论区】，是刚刚发生的事。',
+  '用你自己的话在私聊里简短告诉主人：回了谁、说了什么，哪些要主人亲自看看；不用逐条复述。有草稿的问主人同不同意，主人同意（怎么说都行）就调用 bili_confirm 发出。这个任务平时不定时运行。',
+].join('\n') };
 const RECOMMEND = { name: 'B站推荐', marker: '【推荐】', fallback: '【B站推荐】', base: '你刚才自己逛 B站，逛到一条想推荐给主人的视频（见下面【推荐】，由 B站插件填写）。用你自己的口吻在私聊里告诉主人：讲了什么、你为什么觉得主人会喜欢，附上链接；一两条消息就够，别照抄推荐语。这个任务平时不定时运行。' };
 
 const readText = (f) => fs.readFileSync(f, 'utf8').replace(/^﻿/, '').trim();
@@ -122,11 +126,11 @@ export function dshQqGate(cfg, { log = () => {}, fetchImpl = fetch } = {}) {
     },
     async notify({ kind, text, items }) {
       const s = settings();
-      const t = kind === 'recommend' ? RECOMMEND : INBOX;
+      const t = kind === 'recommend' ? RECOMMEND : kind === 'comments' ? COMMENTS : INBOX;
       const body = String(text ?? '').slice(0, kind === 'recommend' ? 600 : 700);
       try {
         await wake(s, t, body);
-        log(kind === 'recommend' ? `dsh-qq：已叫醒她推荐给主人（${items?.[0]?.title ?? ''}）` : `dsh-qq：已叫醒她处理收件箱（${Array.isArray(items) ? items.length : '?'} 条）`);
+        log(kind === 'recommend' ? `dsh-qq：已叫醒她推荐给主人（${items?.[0]?.title ?? ''}）` : kind === 'comments' ? 'dsh-qq：已叫醒她跟主人说评论区的情况' : `dsh-qq：已叫醒她处理收件箱（${Array.isArray(items) ? items.length : '?'} 条）`);
         return { ok: true };
       } catch (e) {
         log(`dsh-qq：叫醒失败（${e.message}），改为直接私聊主人`);
