@@ -91,8 +91,14 @@ test('门卫：群聊不可信 → auto 也起草；主人同意后 bili_confirm
   assert.equal(d.status, 'draft');
   assert.match(d.text, /bili_confirm/);
   // 主人还没说话
-  assert.match((await confirm(d.draft.id, 'send', { cfg, client, sessionId: 'grp', gateOpts: g, ...f })).text, /还没看到主人同意/);
-  said = [{ at: Date.now() + 10, text: '可以' }];
+  const wait = (await confirm(d.draft.id, 'send', { cfg, client, sessionId: 'grp', gateOpts: g, ...f })).text;
+  assert.match(wait, /还没看到主人表态/);
+  assert.match(wait, /别跟主人说只认某个词/);
+  // 看不出态度的话：原话带回去，让她知道主人说了什么
+  said = [{ at: Date.now() + 10, text: '这条写得怎么样' }];
+  assert.match((await confirm(d.draft.id, 'send', { cfg, client, sessionId: 'grp', gateOpts: g, ...f })).text, /「这条写得怎么样」/);
+  // 用自己的话同意也算（不要求固定的词）
+  said = [{ at: Date.now() + 10, text: '是滴 发吧~' }];
   const ok = await confirm(d.draft.id, 'send', { cfg, client, sessionId: 'grp', gateOpts: g, ...f });
   assert.equal(ok.status, 'sent');
   // 私聊可信 → 直接发
@@ -289,7 +295,7 @@ test('仅自己可见：照实说、记成 hidden、算额度、暂停写操作'
 test('返回里没带状态时自己查一次：公开就说已确认，查不到就说没确认', async () => {
   const f = files(); const f2 = files();
   const pub = { ...fakeClient(), commentState: async (q) => { assert.equal(q.rpid, '999'); return 0; } };
-  assert.match((await request(commentReq('60'), { cfg: cfgOf({ commentMode: 'auto' }), client: pub, ...f })).text, /已确认公开/);
+  assert.match((await request(commentReq('60'), { cfg: cfgOf({ commentMode: 'auto' }), client: pub, ...f })).text, /已确认别人看得到/);
   const unknown = { ...fakeClient(), commentState: async () => null };
   assert.match((await request(commentReq('61'), { cfg: cfgOf({ commentMode: 'auto' }), client: unknown, ...f2 })).text, /没能确认/);
 });
@@ -308,7 +314,7 @@ test('刚发出去还在审核：查几次，变公开了就算成功', async ()
   const client = { ...fakeClient(), commentState: async () => seq.shift() };
   const r = await request(commentReq('63'), { cfg: cfgOf({ commentMode: 'auto' }), client, ...f });
   assert.equal(r.status, 'sent');
-  assert.match(r.text, /已确认公开/);
+  assert.match(r.text, /已确认别人看得到/);
 });
 
 test('楼中楼查可见性时带上它所在的楼', async () => {
@@ -378,7 +384,7 @@ test('关注：直接发只对看过的 UP 主；发完核实并放进她的分�
   assert.match(notSeen.text, /14 天没看过/);
   const r = await request(followReq(), { cfg, client, ...f });
   assert.equal(r.status, 'sent');
-  assert.match(r.text, /已关注（已核实）/);
+  assert.match(r.text, /关注好了（B站上已核实）/);
   assert.deepEqual(client.calls.map((c) => c[0]), ['modify', 'tag', 'addTag']);
   // 10 分钟内不能再关注
   const again = await request(followReq({ payload: { mid: 78 }, target: { mid: '78' } }), { cfg, client, ...f, now: Date.now() + 60_000 });
@@ -476,4 +482,39 @@ test('进程内门卫服务优先于 HTTP，并带上会话说明', async () => 
   assert.deepEqual([r.trusted, r.gate], [true, 'service']);
   assert.equal(seen[0].session.agentPreset, 'qq-chat');
   assert.equal((await hello(cfgOf(), { service })).protocol, 1);
+});
+
+test('主人表态：用自己的话说也认（群里实际的「是滴 关注吧」），在问、不相干、不同意的不算', async () => {
+  const { judge } = await import('../src/act.js');
+  const m = (text) => [{ at: 1, text }];
+  const cases = [
+    ['是滴 关注吧', 'follow', 'yes'], ['关注', 'follow', 'yes'], ['点吧', 'like', 'yes'], ['嗯嗯', 'comment', 'yes'],
+    ['行吧 发出去', 'post', 'yes'], ['好的好的(๑•̀ㅂ•́)و✧', 'dm', 'yes'], ['不关注了', 'unfollow', 'yes'], ['发 #6', 'follow', 'yes'],
+    ['嗯？', 'follow', null], ['真的是这个？', 'follow', null], ['好看', 'comment', null], ['关注我一下', 'follow', null], ['#5 可以', 'follow', null],
+    ['算了不关注了', 'follow', 'no'], ['先别发', 'comment', 'no'], ['别取关', 'unfollow', 'no'],
+  ];
+  for (const [text, kind, want] of cases) assert.equal(judge(m(text), 6, kind), want, `${kind}「${text}」`);
+});
+
+test('主人自己开口要她做的：这句话就算同意，不用再问一遍', async () => {
+  const { ownerAsked } = await import('../src/act.js');
+  const m = (text, at = 1) => ({ at, text });
+  assert.equal(ownerAsked([m('@秋夜の大肥鱼 在b站关注我一下')], 'follow'), '@秋夜の大肥鱼 在b站关注我一下');
+  assert.equal(ownerAsked([m('帮我给这个视频点个赞')], 'like'), '帮我给这个视频点个赞');
+  for (const t of ['你关注了谁啊？', '别乱关注', '不要关注他', '算了不关注了']) assert.equal(ownerAsked([m(t)], 'follow'), null, t);
+  assert.equal(ownerAsked([m('关注我一下')], 'like'), null, '要的是别的操作');
+  // 走一遍：群里（不可信）主人刚说过「关注我一下」→ 直接发，不起草
+  const f = files();
+  const g = gate({ context: () => ({ trusted: false, label: 'QQ 群' }), ownerMessages: () => ({ messages: [{ at: Date.now() - 60_000, text: '在b站关注我一下' }] }) });
+  const client = { cookies: { DedeUserID: '1' }, modifyRelation: async () => {}, relation: async () => ({ attribute: 2 }), relationTags: async () => [{ tagid: 9, name: '小鲸鱼的关注' }], addToRelationTag: async () => {} };
+  const { setVerifyDelay } = await import('../src/act.js');
+  setVerifyDelay(1);
+  const r = await request({ kind: 'follow', payload: { mid: 77 }, preview: '关注 UP 主「UP」', target: { mid: '77', name: 'UP' }, watched: false }, { cfg: cfgOf({ followMode: 'approve', gateUrl: 'http://127.0.0.1:1/g' }), client, sessionId: 'grp', gateOpts: g, ...f });
+  assert.equal(r.status, 'sent');
+  assert.equal(readAudit(5, f.auditFile)[0].how, 'owner-asked');
+  // 主人没开口要：照常起草
+  const g2 = gate({ context: () => ({ trusted: false, label: 'QQ 群' }), ownerMessages: () => ({ messages: [{ at: Date.now() - 60_000, text: '今天吃什么' }] }) });
+  const r2 = await request({ kind: 'follow', payload: { mid: 78 }, preview: '关注', target: { mid: '78' }, watched: false }, { cfg: cfgOf({ followMode: 'approve', gateUrl: 'http://127.0.0.1:1/g' }), client, sessionId: 'grp', gateOpts: g2, ...files() });
+  assert.equal(r2.status, 'draft');
+  assert.match(r2.text, /不用说特定的词/);
 });

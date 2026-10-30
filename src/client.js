@@ -685,7 +685,7 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
                 (d.paused || d.pausedUntil > 0) && h('div', { className: 'be-err' }, d.paused ? '已按「全部停下」：所有写操作都会被拒绝' : `${d.pauseReason || '刚被 B站风控拦过'}：写操作暂停到 ${new Date(d.pausedUntil).toLocaleTimeString()}`),
                 d.followPausedUntil > 0 && h('div', { className: 'be-err' }, `${d.followPauseReason || '关注被 B站拦过'}：关注暂停到 ${new Date(d.followPausedUntil).toLocaleString()}`),
                 kinds.map(([k, label, used, max]) => h(Meter, { key: k, label, used, max })))),
-            h(Card, { title: '待同意', aside: d.drafts.length ? `${d.drafts.length} 条` : '', desc: d.gate ? '她起草后会先在聊天里问主人；主人说「发」她会自己发出。你也可以直接在这里处理。' : '没配门卫：她没法确认主人同意，草稿只能在这里处理。' },
+            h(Card, { title: '待同意', aside: d.drafts.length ? `${d.drafts.length} 条` : '', desc: d.gate ? '她起草后会先在聊天里问主人；主人回一句同意的话（「可以」「嗯」「发吧」「关注吧」都行）她就会发出。你也可以直接在这里处理。' : '没配门卫：她没法确认主人同意，草稿只能在这里处理。' },
               d.drafts.length
                 ? h('div', { className: 'be-items' }, d.drafts.map((x) => h('div', { key: x.id, className: 'be-item' },
                   h('div', { className: 'be-htitle' }, h('span', { className: 'be-badge brand' }, `#${x.id}`), h('span', { className: 'be-badge' }, d.kindText[x.kind]), x.where && h('span', { className: 'be-faint' }, x.where), h('span', { className: 'be-faint' }, when(x.createdAt))),

@@ -130,7 +130,7 @@ export async function followTool(args, exec, { cfg = loadConfig() } = {}) {
   const client = await writeClient(cfg);
   const u = await resolveFollowTarget(client, args.up);
   if (!(u?.mid > 0)) throw new InputError('没找到这个 UP 主');
-  if (u.mid === Number(client.cookies.DedeUserID)) return { status: 'refused', text: '没发：不能关注自己' };
+  if (u.mid === Number(client.cookies.DedeUserID)) return { status: 'refused', text: '没关注：不能关注自己' };
   const attr = (await client.relation(u.mid).catch(() => ({ attribute: -1 }))).attribute;
   if (kind === 'follow' && (attr === 2 || attr === 6)) return { status: 'refused', text: `已经关注「${u.name}」了` };
   if (kind === 'unfollow' && attr === 0) return { status: 'refused', text: `本来就没关注「${u.name}」` };

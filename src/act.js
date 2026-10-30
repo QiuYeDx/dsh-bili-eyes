@@ -25,6 +25,8 @@ const FOLLOW_GAP_S = 600;
 const FOLLOW_HARD_CAP = 10;
 export const FOLLOW_TAG = '小鲸鱼的关注';
 const FOLLOW_STOP = new Set([22002, 22003, 22013, 40061]);   // 只是这一个人关注不了，不暂停
+// 「没发：…」对关注、点赞读着别扭：按操作说「没关注」「没点赞」
+export const NOT_DONE = { like: '没点赞', fav: '没点赞收藏', comment: '没发评论', reply: '没回复', dm: '没发私信', post: '没发动态', follow: '没关注', unfollow: '没取关' };
 const MAX_LEN = { comment: 300, reply: 300, dm: 500, post: 500 };
 const LIGHT = new Set(['like', 'fav']);           // 轻操作：间隔只要 5 秒
 const HIDDEN_PAUSE_MS = 2 * 3600_000;           // 评论被设成「仅自己可见」后，写操作暂停 2 小时（接着发只会更糟）
@@ -122,26 +124,74 @@ export function checkText(kind, text, { ownerName = '', mention = false } = {}) 
 }
 
 // ── 主人的话：同意 / 不同意 ────────────────────────────────────────────────
-const NO_RE = /(不发|别发|不要发|不用发|算了|不用了|取消|不行|不可以|别了|不准|驳回|不同意)/;
-const YES_RE = /^(发|发吧|发呗|发出去|可以|可以发|行|好|好的|好滴|嗯|嗯嗯|ok|okk|同意|批准|准了|去吧|没问题|冲|就这样)(\s*#?\d+)?[!！。.~～]*$/i;
-const YES_IN = /(可以发|发吧|发出去|同意发|就这么发|批准)/;
+// 主人怎么说都行，不要求固定的词：「发」「可以」「嗯」「关注吧」「是滴 关注吧」「点吧」都算同意。
+// 判断方法：短句（30 字内），去掉语气词、标点、表情、草稿编号后，剩下的只由「同意的词 + 这类操作的动词 + 无关紧要的虚词」组成。
+// 「好看」「你看着办吧」这类剩下别的字的，不算表态。先看拒绝，再看同意。
+const NO_RE = /(不发|别发|不要|不用|算了|取消|不行|不可以|别了|不准|驳回|不同意|先别|等等|等一下|再说|再想想|不关注|别关注|不点|别点|不评论|别评论|不回|别回|别取关|不取关|no\b|nope)/i;
+const YES_WORDS = ['发出去', '发吧', '发', '可以', '行', '好的', '好', '嗯', '是的', '是', '对的', '对', '没问题', '同意', '批准', '准了', '去吧', '去', '冲', 'okay', 'okk', 'ok', 'yes', 'go', '就这样', '就这么办', '确认', '按', '搞', '弄', '整'];
+const FILLER = ['一下', '下', '给我', '帮我', '就', '快', '赶紧', '那就', '那', '这个', '它', '他', '她', '吧', '呗'];
+export const ACTION_WORDS = {
+  like: ['点赞', '点', '赞'], fav: ['点赞', '收藏', '点', '赞', '收'],
+  comment: ['评论', '回复', '回', '留言', '评'], reply: ['回复', '回', '评论'],
+  dm: ['私信', '发私信'], post: ['发动态', '动态'],
+  follow: ['关注', '关', '粉'], unfollow: ['取关', '取消关注', '不关注', '别关注'],
+};
+const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const yesRe = (kind) => new RegExp(`^(?:${[...(ACTION_WORDS[kind] ?? []), ...YES_WORDS, ...FILLER].sort((a, b) => b.length - a.length).map(esc).join('|')})+$`, 'i');
+
+/** 一句话是不是在同意（kind：草稿是哪类操作，用来认「关注吧」「点吧」这种直接说动作的）。 */
+export function isYes(text, kind) {
+  const core = String(text ?? '').toLowerCase()
+    .replace(/#?\s*\d{1,4}\s*号?/g, '')                       // 草稿编号
+    .replace(/[^\p{Script=Han}a-z]/gu, '')                     // 标点、空格、表情、颜文字
+    .replace(/[吧呗啊呀哈嘛啦哦噢喔呢滴哒的了嘞咯捏]/g, (c) => (c === '吧' || c === '呗' ? c : ''));  // 语气词（吧、呗 留给 FILLER）
+  return Boolean(core) && yesRe(kind).test(core);
+}
 
 /**
  * 主人在草稿之后说的话里，有没有对这条草稿表态。消息按时间从新到旧看，第一条表态的算数。
  * 带编号（「发 #3」「3 不发」）的只对那条草稿有效；不带编号的对最新的草稿有效（由调用方保证）。
  * 返回 'yes' | 'no' | null。
  */
-export function judge(messages, draftId) {
+export function judge(messages, draftId, kind = '') {
   const sorted = [...messages].sort((a, b) => b.at - a.at);
   for (const m of sorted) {
     const t = String(m.text ?? '').trim();
-    if (!t || t.length > 40) continue;
-    const num = /#?\s*(\d{1,4})\b/.exec(t);
-    if (num && Number(num[1]) !== Number(draftId)) continue;
-    if (NO_RE.test(t)) return 'no';
-    if (YES_RE.test(t) || YES_IN.test(t)) return 'yes';
+    if (!t || t.length > 30) continue;
+    const num = /#\s*(\d{1,4})\b|(?:^|\s)(\d{1,4})\s*号?(?=\s|$)/.exec(t);
+    const n = num ? Number(num[1] ?? num[2]) : null;
+    if (n != null && n !== Number(draftId)) continue;
+    // 取关时「不关注了」是同意，不是拒绝
+    if (NO_RE.test(kind === 'unfollow' ? t.replace(/取消关注|不关注了?/g, '') : t)) return 'no';
+    if (/[?？]/.test(t)) continue;   // 「嗯？」「发？」是在问，不是同意
+    if (isYes(t, kind)) return 'yes';
   }
   return null;
+}
+
+// 主人自己开口要她做的：点名了这类操作的词（只用两个字以上的、或不会误会的）
+const OWNER_ASK_MS = 5 * 60_000;
+const ASK_WORDS = {
+  like: ['点赞', '赞', '收藏'], fav: ['点赞', '赞', '收藏'], comment: ['评论', '留言'], reply: ['回复', '回一下', '回他', '回她', '回个'],
+  dm: ['私信'], post: ['动态'], follow: ['关注'], unfollow: ['取关', '取消关注'],
+};
+/** 主人最近的话里，有没有一句是在要她做这类操作。有就返回那句话。 */
+export function ownerAsked(messages, kind) {
+  const words = ASK_WORDS[kind] ?? [];
+  for (const m of [...messages].sort((a, b) => b.at - a.at)) {
+    const t = String(m.text ?? '').trim();
+    if (!t || t.length > 40 || /[?？]/.test(t)) continue;
+    if (NO_RE.test(kind === 'unfollow' ? t.replace(/取消关注|不关注了?/g, '') : t)) continue;
+    if (/(别|不要|不用|不准|不许|没让|不是让|禁止)/.test(t)) continue;   // 「别乱关注」「不要点赞」
+    if (words.some((w) => t.includes(w))) return t;
+  }
+  return null;
+}
+
+/** 给模型看的：这类操作，主人怎么回算同意（举例，不是规定）。 */
+export function yesExamples(kind) {
+  const verb = { like: '点吧', fav: '点吧', comment: '发吧', reply: '回吧', dm: '发吧', post: '发吧', follow: '关注吧', unfollow: '取关吧' }[kind] ?? '发吧';
+  return `「可以」「嗯」「${verb}」`;
 }
 
 // ── 执行 ──────────────────────────────────────────────────────────────────
@@ -194,7 +244,7 @@ async function performFollow(client, d) {
       await client.addToRelationTag(mid, tagid);
     } catch (e) { tagNote = `（没放进「${FOLLOW_TAG}」分组：${e?.message ?? e}）`; }
   }
-  return { unconfirmed: !confirmed, state: attr, info: confirmed ? `已${KIND_TEXT[d.kind]}（已核实）${tagNote}` : `${KIND_TEXT[d.kind]}请求成功了，但查不到关系变化` };
+  return { unconfirmed: !confirmed, state: attr, info: confirmed ? `${KIND_TEXT[d.kind]}好了（B站上已核实）${tagNote}` : `${KIND_TEXT[d.kind]}请求 B站 接受了，但查不到关系变化` };
 }
 
 /** 真正发请求。返回 {rpid?, info, state?, hidden?}。 */
@@ -204,7 +254,7 @@ async function perform(client, d) {
     try { await client.likeVideo(p.aid); }
     catch (e) { if (e?.code !== 65006) throw e; }   // 65006 = 已经赞过
     if (d.kind === 'fav') await client.favVideo(p.aid, await client.defaultFavFolder());
-    return { info: d.kind === 'fav' ? '已点赞并收藏' : '已点赞' };
+    return { info: d.kind === 'fav' ? '点赞并收藏好了' : '点赞好了' };
   }
   if (d.kind === 'comment' || d.kind === 'reply') {
     const r = await client.addComment({ oid: p.oid, type: p.type, message: p.text, root: p.root, parent: p.parent, atNameToMid: p.atNameToMid });
@@ -212,11 +262,11 @@ async function perform(client, d) {
     // B站接受了不等于别人看得到：发评论接口返回的 reply.state 是 0（乐观值），实际可能被设成
     // 「仅自己可见」（state 17，风控或审核中），接口照样返回成功。只能发完用自己的视角再查一遍。
     const state = await verifyCommentState(client, { oid: p.oid, type: p.type, rpid, root: d.kind === 'reply' ? p.root : 0 });
-    return { rpid, state, hidden: state != null && state !== 0, info: state === 0 ? '已发出（已确认公开）' : '已发出' };
+    return { rpid, state, hidden: state != null && state !== 0, info: state === 0 ? `${KIND_TEXT[d.kind]}发出去了（已确认别人看得到）` : `${KIND_TEXT[d.kind]}发出去了` };
   }
-  if (d.kind === 'dm') { await client.sendDm({ receiverMid: p.to, text: p.text }); return { info: '已发出' }; }
+  if (d.kind === 'dm') { await client.sendDm({ receiverMid: p.to, text: p.text }); return { info: '私信发出去了' }; }
   if (FOLLOW.has(d.kind)) return performFollow(client, d);
-  if (d.kind === 'post') { const r = await client.postDynamic(p.text); return { rpid: String(r?.dyn_id_str ?? ''), info: '已发出' }; }
+  if (d.kind === 'post') { const r = await client.postDynamic(p.text); return { rpid: String(r?.dyn_id_str ?? ''), info: '动态发出去了' }; }
   throw new ActError(`不认识的操作 ${d.kind}`);
 }
 
@@ -230,7 +280,7 @@ export async function request(req, { cfg, client, sessionId = '', session = null
   const { kind } = req;
   let mode = cfg[MODE_KEY[kind]];
   if (kind === 'unfollow' && mode === 'auto') mode = 'approve';   // 取关永远先问主人
-  const refuse = (why) => { audit({ kind, status: 'refused', target: req.target, text: req.payload?.text, error: why }, auditFile); return { status: 'refused', text: `没发：${why}` }; };
+  const refuse = (why) => { audit({ kind, status: 'refused', target: req.target, text: req.payload?.text, error: why }, auditFile); return { status: 'refused', text: `${NOT_DONE[kind]}：${why}` }; };
   if (mode === 'off') return refuse(`主人没开「${KIND_TEXT[kind]}」（设置页 → 互动）`);
   if (cfg.writePaused) return refuse('主人在设置页按了「全部停下」');
   const drafts = loadDrafts(draftsFile);
@@ -254,13 +304,20 @@ export async function request(req, { cfg, client, sessionId = '', session = null
   if (autoOk && (ctx.trusted || via === 'ui')) {
     return send({ kind, payload: req.payload, preview: req.preview, target: req.target }, { cfg, client, entries, now, auditFile, draftsFile, how: via === 'ui' ? 'ui' : 'auto' });
   }
+  // 主人刚刚自己要她做这件事（「在 b站关注我一下」「帮我点个赞」）：这句话本身就是同意，不用再问一遍。
+  // 只认门卫给的主人原话（群友说的不算），5 分钟内、不是问句、没有否定、点名了这类操作。
+  if ((ctx.gate === 'http' || ctx.gate === 'service') && via === 'tool') {
+    const recent = await ownerMessages(cfg, session ? { sessionId, session } : sessionId, now - OWNER_ASK_MS, gateOpts);
+    const asked = recent && ownerAsked(recent, kind);
+    if (asked) return send({ kind, payload: req.payload, preview: req.preview, target: { ...req.target, asked: clip(asked, 40) } }, { cfg, client, entries, now, auditFile, draftsFile, how: 'owner-asked' });
+  }
   // 内置门卫 + 可信会话：直接在 DSH 里弹审批卡片（同一轮里等主人点）
   if (ctx.gate === 'builtin' && ctx.trusted && approve) {
     const outcome = await approve(`B站${KIND_TEXT[kind]}：${clip(req.preview, 120)}`);
     if (outcome === 'allowed-once') return send({ kind, payload: req.payload, preview: req.preview, target: req.target }, { cfg, client, entries, now, auditFile, draftsFile, how: 'card' });
     if (outcome === 'rejected') {
       audit({ kind, status: 'rejected', target: req.target, text: req.payload?.text, how: 'card' }, auditFile);
-      return { status: 'refused', text: `主人在审批卡片上点了拒绝，没发（${KIND_TEXT[kind]}）。别换个说法再试。` };
+      return { status: 'refused', text: `主人在审批卡片上点了拒绝，${NOT_DONE[kind]}。别换个说法再试。` };
     }
     // 'cancelled' / 'unavailable'（没有窗口能弹卡片）：照常起草
   }
@@ -271,10 +328,10 @@ export async function request(req, { cfg, client, sessionId = '', session = null
   saveDrafts(drafts, draftsFile);
   audit({ kind, status: 'draft', draft: draft.id, target: req.target, text: req.payload?.text, where: ctx.label }, auditFile);
   const how = ctx.gate !== 'builtin'
-    ? '先问主人要不要发（把要发的内容告诉主人），主人明确同意后调用 bili_confirm({draft: 编号})；主人说不发就调用 bili_confirm({draft: 编号, decision: "drop"})。'
-    : '要主人在 DSH 设置页「B站看视频 → 互动 → 待同意」里点同意才会发出。';
-  const why = mode === 'auto' && kind === 'follow' && !req.watched ? '（最近 14 天没看过这个 UP 主的视频，所以要先问主人）' : '';
-  return { status: 'draft', draft, text: `已起草 #${draft.id}（${KIND_TEXT[kind]}：${clip(req.preview, 80)}）${why}，还没发出去。${how}` };
+    ? `用你自己的话问主人一句（说清楚要${KIND_TEXT[kind]}什么）。主人回一句同意的话就行，比如${yesExamples(kind)}，不用说特定的词，也别要求主人说某个词；主人同意后调用 bili_confirm({draft: ${draft.id}})。主人说不要就调用 bili_confirm({draft: ${draft.id}, decision: "drop"})。`
+    : '要主人在 DSH 设置页「B站看视频 → 互动 → 待同意」里点同意才会发出，跟主人说一声就好。';
+  const why = mode === 'auto' && kind === 'follow' && !req.watched ? '最近 14 天没看过这个 UP 主的视频，所以要先问主人。' : '';
+  return { status: 'draft', draft, text: `还没${KIND_TEXT[kind]}，先起草了 #${draft.id}：${clip(req.preview, 80)}。${why}${how}` };
 }
 
 /** 发出（不再检查档位和可信，只检查间隔和风控）。 */
@@ -286,7 +343,7 @@ async function send(d, { cfg, client, entries = readAudit(2000), now = Date.now(
   const waitFor = (e, g) => (e && now - e.at < g * 1000 ? Math.ceil((g * 1000 - (now - e.at)) / 1000) : 0);
   const wait = Math.max(waitFor(last, gap), waitFor(lastFollow, FOLLOW_GAP_S));
   if (wait > 0) {
-    return { status: 'refused', text: `没发：离上一次${waitFor(lastFollow, FOLLOW_GAP_S) ? '关注' : '写操作'}太近，${wait} 秒后再试${draftId ? `（草稿 #${draftId} 还留着）` : ''}` };
+    return { status: 'refused', text: `${NOT_DONE[d.kind]}：离上一次${waitFor(lastFollow, FOLLOW_GAP_S) ? '关注' : '写操作'}太近，${wait} 秒后再试${draftId ? `（草稿 #${draftId} 还留着）` : ''}` };
   }
   try {
     const r = await perform(client, d);
@@ -305,7 +362,7 @@ async function send(d, { cfg, client, entries = readAudit(2000), now = Date.now(
     }
     audit({ kind: d.kind, status: 'ok', how, draft: draftId, target: d.target, text: d.payload?.text, rpid: r.rpid ?? '', state: r.state ?? null }, auditFile);
     const unsure = r.state == null && (d.kind === 'comment' || d.kind === 'reply') ? '（没能确认别人看不看得到）' : '';
-    return { status: 'sent', text: `${KIND_TEXT[d.kind]}${r.info}：${clip(d.preview, 80)}${unsure}`, rpid: r.rpid };
+    return { status: 'sent', text: `${r.info}：${clip(d.preview, 80)}${unsure}`, rpid: r.rpid };
   } catch (e) {
     if (e instanceof ActError) throw e;
     if (RISK_CODES.has(e?.code)) {
@@ -326,7 +383,7 @@ async function send(d, { cfg, client, entries = readAudit(2000), now = Date.now(
         extra += '，关注先暂停 6 小时';
       }
     }
-    return { status: 'failed', text: `B站没让发：${why}。别反复重试${extra}。` };
+    return { status: 'failed', text: `B站拒绝了，${NOT_DONE[d.kind]}：${why}。别反复重试${extra}。` };
   }
 }
 
@@ -365,9 +422,9 @@ export async function confirm(draftId, decision, { cfg, client, sessionId = '', 
     audit({ kind: d.kind, status: 'rejected', draft: d.id, target: d.target, text: d.payload?.text, how: via }, auditFile);
     return { status: 'refused', text: `草稿 #${d.id} 丢掉了` };
   }
-  if (cfg.writePaused) return { status: 'refused', text: '没发：主人在设置页按了「全部停下」' };
-  if (cfg[MODE_KEY[d.kind]] === 'off') return { status: 'refused', text: `没发：主人把「${KIND_TEXT[d.kind]}」关了` };
-  if (drafts.pausedUntil > now) return { status: 'refused', text: `没发：写操作暂停到 ${new Date(drafts.pausedUntil).toLocaleTimeString()}（${drafts.pauseReason || '刚被风控拦过'}）` };
+  if (cfg.writePaused) return { status: 'refused', text: `${NOT_DONE[d.kind]}：主人在设置页按了「全部停下」` };
+  if (cfg[MODE_KEY[d.kind]] === 'off') return { status: 'refused', text: `${NOT_DONE[d.kind]}：主人把「${KIND_TEXT[d.kind]}」关了` };
+  if (drafts.pausedUntil > now) return { status: 'refused', text: `${NOT_DONE[d.kind]}：写操作暂停到 ${new Date(drafts.pausedUntil).toLocaleTimeString()}（${drafts.pauseReason || '刚被风控拦过'}）` };
   let how = 'ui';
   if (via !== 'ui') {
     if (gateKind(cfg, gateOpts) === 'builtin') return { status: 'refused', text: `没法确认主人同意了：没接门卫。草稿 #${d.id} 要主人在设置页里点同意。` };
@@ -376,13 +433,16 @@ export async function confirm(draftId, decision, { cfg, client, sessionId = '', 
     // 不带编号的表态只对最新那条待同意的草稿有效
     const newest = Math.max(...drafts.list.filter((x) => x.status === 'pending').map((x) => x.id));
     const relevant = d.id === newest ? msgs : msgs.filter((m) => /\d/.test(m.text));
-    const verdict = judge(relevant, d.id);
+    const verdict = judge(relevant, d.id, d.kind);
     if (verdict === 'no') {
       finish('rejected', 'owner');
       audit({ kind: d.kind, status: 'rejected', draft: d.id, target: d.target, text: d.payload?.text, how: 'owner' }, auditFile);
-      return { status: 'refused', text: `主人说不发，草稿 #${d.id} 丢掉了` };
+      return { status: 'refused', text: `主人说不要，草稿 #${d.id} 丢掉了，没${KIND_TEXT[d.kind]}。` };
     }
-    if (verdict !== 'yes') return { status: 'refused', text: `还没看到主人同意（草稿 #${d.id} 之后主人没说「发 / 可以」之类的话${d.id === newest ? '' : `；有好几条草稿时要带编号，比如「发 #${d.id}」`}）。先别发，等主人回话。` };
+    if (verdict !== 'yes') {
+      const said = msgs.filter((m) => m.text.trim()).slice(-2).map((m) => `「${clip(m.text, 30)}」`).join('、');
+      return { status: 'refused', text: `还没看到主人表态（草稿 #${d.id} 之后${said ? `主人说的是：${said}，看不出是同意还是不同意` : '主人还没说话'}）。先等主人回话，或者再用自己的话问一句；${d.id === newest ? '' : `有好几条草稿时让主人带上编号（比如「#${d.id} 可以」）；`}别跟主人说只认某个词，主人说${yesExamples(d.kind)}都算。` };
+    }
     how = 'owner';
   }
   const r = await send(d, { cfg, client, now, auditFile, draftsFile, how, draftId: d.id });
