@@ -206,6 +206,7 @@ async function getView(view, ctx) {
       counts: todayCounts(entries),
       quota: { like: cfg.likePerDay, comment: cfg.commentPerDay, reply: cfg.replyPerDay, dm: cfg.dmPerDay, post: cfg.postPerDay, follow: cfg.followPerDay },
       follows: ownFollows(readAudit(2000)),
+      followTag: cfg.followTag || DEFAULTS.followTag,
       followPausedUntil: drafts.followPausedUntil > Date.now() ? drafts.followPausedUntil : 0,
       followPauseReason: drafts.followPauseReason,
       paused: cfg.writePaused,

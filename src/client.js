@@ -693,7 +693,7 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
                   x.target?.title && h('div', { className: 'be-faint' }, x.target.url ? h('a', { href: x.target.url, target: '_blank', rel: 'noreferrer', style: { color: 'inherit' } }, `《${x.target.title}》`) : `《${x.target.title}》`),
                   x.expired ? h('div', { className: 'be-faint' }, '已过期') : h('div', { className: 'be-row' }, h(Btn, { kind: 'primary', onClick: () => draftDo(x.id, 'send') }, '同意并发出'), h(Btn, { onClick: () => draftDo(x.id, 'drop') }, '丢掉')))))
                 : h('div', { className: 'be-empty' }, '没有待同意的草稿。')),
-            h(Card, { title: '她的关注', aside: d.follows.length ? `${d.follows.length} 个` : '', desc: '她自己关注的 UP 主（都在 B站的「小鲸鱼的关注」分组里）。号上原来就有的关注不在这里，她也动不了。' },
+            h(Card, { title: '她的关注', aside: d.follows.length ? `${d.follows.length} 个` : '', desc: `她自己关注的 UP 主（都在 B站的「${d.followTag}」分组里）。号上原来就有的关注不在这里，她也动不了。` },
               d.follows.length > 0 && h('div', { className: 'be-row' },
                 followedToday > 0 && h(ConfirmBtn, { label: `撤销今天的 ${followedToday} 个关注`, confirmLabel: '确认全部取关？', onConfirm: undoToday }),
                 h(Btn, { onClick: recheckF }, '再核实一次')),

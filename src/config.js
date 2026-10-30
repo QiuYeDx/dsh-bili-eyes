@@ -60,6 +60,7 @@ export const DEFAULTS = Object.freeze({
   dmMode: 'off',
   postMode: 'off',
   followMode: 'off',       // 关注 UP 主；取关最高只到「先问主人」
+  followTag: 'AI 的关注',   // 她关注的人放进 B站的这个分组（没有就建）；也是她能取关的范围
   likePerDay: 30,
   commentPerDay: 5,        // 顶层评论
   replyPerDay: 10,         // 楼中楼回复
@@ -143,6 +144,7 @@ export const FIELDS = Object.freeze([
   { key: 'replyPerDay', group: 'act', type: 'int', min: 0, max: 100, unit: '条', label: '每天最多回复' },
   { key: 'dmPerDay', group: 'act', type: 'int', min: 0, max: 50, unit: '条', label: '每天最多私信' },
   { key: 'postPerDay', group: 'act', type: 'int', min: 0, max: 10, unit: '条', label: '每天最多动态' },
+  { key: 'followTag', group: 'act', type: 'text', max: 16, label: '关注分组名', hint: '她关注的人会放进 B站的这个分组（没有就建），也只能取关这个分组里的人。改名后，旧分组里的人不会自动搬过来' },
   { key: 'followPerDay', group: 'act', type: 'int', min: 0, max: 10, unit: '个', label: '每天最多关注', hint: '取关另算同样的数；两次关注至少隔 10 分钟' },
   { key: 'writeGapSeconds', group: 'act', type: 'int', min: 10, max: 3600, unit: '秒', label: '两次之间至少隔' },
   { key: 'draftMinutes', group: 'act', type: 'int', min: 5, max: 1440, unit: '分钟', label: '草稿有效期', hint: '这么久没同意就作废' },

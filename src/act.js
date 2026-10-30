@@ -7,7 +7,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR, saveConfig } from './config.js';
+import { DATA_DIR, saveConfig, DEFAULTS } from './config.js';
 import { clip } from './look.js';
 import { sessionContext, ownerMessages, gateKind } from './gate.js';
 
@@ -23,7 +23,7 @@ const QUOTA_KEY = { like: 'likePerDay', fav: 'likePerDay', comment: 'commentPerD
 const FOLLOW = new Set(['follow', 'unfollow']);
 const FOLLOW_GAP_S = 600;
 const FOLLOW_HARD_CAP = 10;
-export const FOLLOW_TAG = '小鲸鱼的关注';
+const DEFAULT_FOLLOW_TAG = DEFAULTS.followTag;
 const FOLLOW_STOP = new Set([22002, 22003, 22013, 40061]);   // 只是这一个人关注不了，不暂停
 // 「没发：…」对关注、点赞读着别扭：按操作说「没关注」「没点赞」
 export const NOT_DONE = { like: '没点赞', fav: '没点赞收藏', comment: '没发评论', reply: '没回复', dm: '没发私信', post: '没发动态', follow: '没关注', unfollow: '没取关' };
@@ -222,9 +222,9 @@ async function verifyCommentState(client, { oid, type, rpid, root }) {
 
 /**
  * 关注 / 取关，发完核实（评论被悄悄藏起来过，关注也照样查）：隔 1.5、3、6 秒各查一次关系。
- * 关注成功后放进「小鲸鱼的关注」分组（没有就建）；分组失败不影响关注本身。
+ * 关注成功后放进设置里的关注分组（followTag，没有就建）；分组失败不影响关注本身。
  */
-async function performFollow(client, d) {
+async function performFollow(client, d, tagName) {
   const mid = Number(d.payload.mid);
   const follow = d.kind === 'follow';
   try { await client.modifyRelation(mid, follow ? 1 : 2); }
@@ -239,16 +239,16 @@ async function performFollow(client, d) {
   let tagNote = '';
   if (follow && confirmed) {
     try {
-      const tag = (await client.relationTags()).find((t) => t.name === FOLLOW_TAG);
-      const tagid = tag ? Number(tag.tagid) : await client.createRelationTag(FOLLOW_TAG);
+      const tag = (await client.relationTags()).find((t) => t.name === tagName);
+      const tagid = tag ? Number(tag.tagid) : await client.createRelationTag(tagName);
       await client.addToRelationTag(mid, tagid);
-    } catch (e) { tagNote = `（没放进「${FOLLOW_TAG}」分组：${e?.message ?? e}）`; }
+    } catch (e) { tagNote = `（没放进「${tagName}」分组：${e?.message ?? e}）`; }
   }
   return { unconfirmed: !confirmed, state: attr, info: confirmed ? `${KIND_TEXT[d.kind]}好了（B站上已核实）${tagNote}` : `${KIND_TEXT[d.kind]}请求 B站 接受了，但查不到关系变化` };
 }
 
 /** 真正发请求。返回 {rpid?, info, state?, hidden?}。 */
-async function perform(client, d) {
+async function perform(client, d, cfg) {
   const p = d.payload;
   if (d.kind === 'like' || d.kind === 'fav') {
     try { await client.likeVideo(p.aid); }
@@ -265,7 +265,7 @@ async function perform(client, d) {
     return { rpid, state, hidden: state != null && state !== 0, info: state === 0 ? `${KIND_TEXT[d.kind]}发出去了（已确认别人看得到）` : `${KIND_TEXT[d.kind]}发出去了` };
   }
   if (d.kind === 'dm') { await client.sendDm({ receiverMid: p.to, text: p.text }); return { info: '私信发出去了' }; }
-  if (FOLLOW.has(d.kind)) return performFollow(client, d);
+  if (FOLLOW.has(d.kind)) return performFollow(client, d, cfg?.followTag || DEFAULT_FOLLOW_TAG);
   if (d.kind === 'post') { const r = await client.postDynamic(p.text); return { rpid: String(r?.dyn_id_str ?? ''), info: '动态发出去了' }; }
   throw new ActError(`不认识的操作 ${d.kind}`);
 }
@@ -346,7 +346,7 @@ async function send(d, { cfg, client, entries = readAudit(2000), now = Date.now(
     return { status: 'refused', text: `${NOT_DONE[d.kind]}：离上一次${waitFor(lastFollow, FOLLOW_GAP_S) ? '关注' : '写操作'}太近，${wait} 秒后再试${draftId ? `（草稿 #${draftId} 还留着）` : ''}` };
   }
   try {
-    const r = await perform(client, d);
+    const r = await perform(client, d, cfg);
     if (r.unconfirmed) {
       audit({ kind: d.kind, status: 'unconfirmed', how, draft: draftId, target: d.target, state: r.state }, auditFile);
       pauseFollow(draftsFile, now + 24 * 3600_000, `上一次${KIND_TEXT[d.kind]}没核实到`);

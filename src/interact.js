@@ -1,8 +1,8 @@
 // 工具层：把模型给的参数（链接、rpid、收件箱编号）换成写操作要的参数，交给 act.js；收件箱轮询也在这里。
-import { loadConfig } from './config.js';
+import { loadConfig, DEFAULTS } from './config.js';
 import { loadCredential } from './credential.js';
 import { InputError, makeClient, resolveVideo, clip } from './look.js';
-import { request, confirm, checkText, loadDrafts, readAudit, ownFollows, FOLLOW_TAG, ActError } from './act.js';
+import { request, confirm, checkText, loadDrafts, readAudit, ownFollows, ActError } from './act.js';
 import { resolveUp } from './feed.js';
 import { watchedUp } from './seen-ups.js';
 import { parseInput } from './url.js';
@@ -141,7 +141,7 @@ export async function followTool(args, exec, { cfg = loadConfig() } = {}) {
     if (!own) {
       // 审计只留最近的记录：再看她的分组里有没有这个人
       try {
-        const tag = (await client.relationTags()).find((t) => t.name === FOLLOW_TAG);
+        const tag = (await client.relationTags()).find((t) => t.name === (cfg.followTag || DEFAULTS.followTag));
         if (tag) own = (await client.relationTagMembers(tag.tagid)).some((m) => m.mid === u.mid);
       } catch { /* 查不到就按不是她关注的处理 */ }
     }

@@ -518,3 +518,15 @@ test('主人自己开口要她做的：这句话就算同意，不用再问一�
   assert.equal(r2.status, 'draft');
   assert.match(r2.text, /不用说特定的词/);
 });
+
+test('关注分组名按设置来（别人装上不会多出别人角色名字的分组）', async () => {
+  const { setVerifyDelay } = await import('../src/act.js');
+  setVerifyDelay(1);
+  const made = [];
+  const client = { cookies: { DedeUserID: '1' }, modifyRelation: async () => {}, relation: async () => ({ attribute: 2 }), relationTags: async () => [], createRelationTag: async (n) => { made.push(n); return 5; }, addToRelationTag: async () => {} };
+  const req = (mid) => ({ kind: 'follow', payload: { mid }, preview: '关注', target: { mid: String(mid) }, watched: true });
+  await request(req(90), { cfg: cfgOf({ followMode: 'auto', followTag: '测试分组' }), client, ...files() });
+  await request(req(91), { cfg: cfgOf({ followMode: 'auto' }), client, ...files() });
+  assert.deepEqual(made, ['测试分组', DEFAULTS.followTag]);
+  assert.doesNotMatch(DEFAULTS.followTag, /小鲸鱼/);
+});
