@@ -72,6 +72,8 @@ export const DEFAULTS = Object.freeze({
   writePaused: false,      // 全部停下
   // 门卫：回答「这个会话是不是主人本人」「主人说过什么」，并转达收件箱。
   // 没接外部门卫时用内置的：按会话的 agentPreset / 工作目录判断是不是桥接会话
+  gateMode: 'auto',        // 门卫来源：auto（桥接服务 > 门卫地址 > 内置）/ dsh-qq（插件自己当 dsh-qq 桥接的门卫）/ builtin
+  qqBridgeDir: '',         // gateMode=dsh-qq 时：dsh-qq 桥接的目录
   gateUrl: '',
   gateHeader: '',          // 请求门卫时带的头，写成「名字: 值」
   untrustedPresets: '',    // 内置门卫：agentPreset 符合这个正则就当桥接会话（空 = 默认规则）
@@ -149,6 +151,8 @@ export const FIELDS = Object.freeze([
   { key: 'writeGapSeconds', group: 'act', type: 'int', min: 10, max: 3600, unit: '秒', label: '两次之间至少隔' },
   { key: 'draftMinutes', group: 'act', type: 'int', min: 5, max: 1440, unit: '分钟', label: '草稿有效期', hint: '这么久没同意就作废' },
   { key: 'writePaused', group: 'act', type: 'bool', label: '全部停下', hint: '打开后一切写操作都拒绝（草稿也发不出去）' },
+  { key: 'gateMode', group: 'gate', type: 'enum', options: [['auto', '自动（桥接提供的门卫 > 门卫地址 > 内置）'], ['dsh-qq', 'dsh-qq 桥接（插件自己当门卫）'], ['builtin', '只用内置门卫']], label: '门卫来源', hint: '用 dsh-qq（h-D-ACE/dsh-qq）接 QQ 的，选 dsh-qq 并填下面的桥接目录，不用另外跑门卫服务' },
+  { key: 'qqBridgeDir', group: 'gate', type: 'dir', label: 'dsh-qq 桥接目录', hint: '有 config.json 和 src/bridge.js 的那个目录；门卫来源选 dsh-qq 时用' },
   { key: 'gateUrl', group: 'gate', type: 'text', max: 200, pattern: /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/\S*)?$/, patternHint: '只能是本机地址 http://127.0.0.1:端口/路径', label: '门卫地址', hint: '本机 HTTP 接口，回答「这个会话是不是主人本人」「主人说过什么」并转达收件箱；留空 = 只能在这里点同意' },
   { key: 'gateHeader', group: 'gate', type: 'text', max: 200, pattern: /^[A-Za-z0-9-]+:\s*\S.*$/, patternHint: '写成「名字: 值」', label: '请求头', hint: '请求门卫时带上，比如 x-fish: 1' },
   { key: 'untrustedPresets', group: 'gate', type: 'text', max: 200, regex: true, label: '内置门卫：桥接会话的 agentPreset', hint: '没接门卫时用。会话（或它的父会话）的 agentPreset 符合这个正则就当桥接会话：只能起草，不弹审批卡片。留空 = qq|wechat|weixin|wx|onebot|napcat|bot|group' },

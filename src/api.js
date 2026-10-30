@@ -21,6 +21,9 @@ import { pollInbox, ownerName, writeClient } from './interact.js';
 import { loadDrafts, readAudit, todayCounts, confirm, deleteSent, deletedIds, visibleIds, recheckHidden, ownFollows, ownerUnfollow, recheckFollows, KIND_TEXT, ActError, sleep } from './act.js';
 import { sessionContext, gateKind, hello, recentJudgments } from './gate.js';
 import { ALL_TOOLS } from './tool-list.js';
+import { checkBridge } from './adapters/dsh-qq.js';
+import { asrView, saveAsr, clearAsr, testAsr } from './asr-config.js';
+import { patchStatus, applyPatches } from './adapters/dsh-qq-patch.js';
 import { mediaBins, mediaDirOf, resetFfmpegCheck } from './media.js';
 import { installFfmpeg, installState } from './ffmpeg-fetch.js';
 
@@ -172,16 +175,17 @@ async function getView(view, ctx) {
         { id: 'ffmpeg', ok: media, label: media ? `ffmpeg ${ffmpeg.version}，ffprobe ${ffprobe.version}` : `${ffmpeg.ok ? 'ffprobe' : 'ffmpeg'} 不可用：${(ffmpeg.ok ? ffprobe : ffmpeg).error}`, hint: media ? '' : '缺了它看不了画面，只有标题、简介、评论、字幕这些文字。点「下载」自动装到 DSH 的工具目录（约 50 MB），或者自己装好后在「设置 → 路径」里指定', install: !media || dl.running ? dl : null },
         { id: 'login', ok: login.state === 'ok', optional: true, label: login.state === 'ok' && login.level != null ? `${loginText}（LV${login.level}）` : loginText, hint: login.state === 'ok' ? (login.level === 0 ? 'LV0 不能发评论：去 B站 App 答题转正' : '') : '可选：不登录也能看视频；登录后才有 AI 字幕、AI 总结、1080P 放大、个性化推荐、关注动态、收件箱和写操作（建议用小号）' },
         { id: 'owner', ok: cfg.ownerMid > 0, optional: true, label: cfg.ownerMid > 0 ? `主人 UID：${cfg.ownerMid}` : '没设置主人的 B站 UID', hint: cfg.ownerMid > 0 ? '' : '可选：设置后她才能 @ 主人、私信主人、转达主人的私信（「互动」页）' },
-        { id: 'gate', ok: true, optional: gk === 'builtin', label: { service: '门卫：桥接插件提供', http: `门卫：${cfg.gateUrl}`, builtin: '门卫：内置（按会话的 agentPreset / 工作目录判断）' }[gk], hint: (gk === 'builtin' ? '内置门卫只是推断：本机会话「先问主人」时弹 DSH 审批卡片；桥接会话只能起草、在「互动」页同意；收件箱没处转达。接 QQ 等桥接时最好让桥接提供门卫（docs/门卫协议.md）。' : '') + (judged.length ? ` 最近的会话：${judged.slice(0, 4).map((j) => `${j.label}${j.trusted ? '✓' : '✗'}`).join('，')}` : '') },
+        { id: 'gate', ok: true, optional: gk === 'builtin', label: { service: '门卫：桥接插件提供', 'dsh-qq': `门卫：dsh-qq 桥接（${cfg.qqBridgeDir}）`, http: `门卫：${cfg.gateUrl}`, builtin: '门卫：内置（按会话的 agentPreset / 工作目录判断）' }[gk], hint: (gk === 'builtin' ? '内置门卫只是推断：本机会话「先问主人」时弹 DSH 审批卡片；桥接会话只能起草、在「互动」页同意；收件箱没处转达。接 QQ 等桥接时最好让桥接提供门卫（docs/门卫协议.md）。' : '') + (judged.length ? ` 最近的会话：${judged.slice(0, 4).map((j) => `${j.label}${j.trusted ? '✓' : '✗'}`).join('，')}` : '') },
         { id: 'inbox', ok: cfg.inboxOn, optional: true, label: cfg.inboxOn ? `收件箱：每 ${cfg.inboxIntervalSeconds} 秒查一次${cfg.inboxQuiet ? `，${cfg.inboxQuiet} 不查` : ''}` : '收件箱没开', hint: cfg.inboxOn ? (gk === 'builtin' ? '没接门卫：新消息不会主动转达，她下次用 B站工具时会提一句' : '') : '可选：在「收件箱」页打开后，别人回复、@、私信会转达给她' },
         { id: 'disk', ok: !onC(mediaDirOf(cfg)), optional: true, label: `下载的视频放在 ${mediaDirOf(cfg)}`, hint: onC(mediaDirOf(cfg)) ? '在系统盘：视频多了占地方，可以在「设置 → 路径」换到别的盘' : '' },
-        { id: 'asr', ok: asr.ok, optional: true, label: asr.ok ? `语音识别：${asr.baseUrl}${asr.model ? `（${asr.model}）` : ''}${asr.managed ? '，用到时自动拉起' : ''}` : '没配置语音识别', hint: asr.ok ? '' : `可选：没有字幕的视频就没有台词。配置文件 ${asr.file}` },
+        { id: 'asr', ok: asr.ok, optional: true, label: asr.ok ? `语音识别：${asr.baseUrl}${asr.model ? `（${asr.model}）` : ''}${asr.managed ? '，用到时自动拉起' : ''}` : '没配置语音识别', hint: asr.ok ? '' : '可选：没有字幕的视频就没有台词。在「设置 → 语音识别」里配：硅基流动填个 API Key 就行，也可以用本机服务' },
       ],
       history: readHistory(40),
       configFile: CONFIG_FILE,
     };
   }
   if (view === 'trails') return { trails: loadTrails() };
+  if (view === 'asr') return asrView();
   if (view === 'autosurf') {
     const st = cfg.autoSurfOn ? ensurePlan(loadAuto(), cfg, Date.now()) : loadAuto();
     return { on: cfg.autoSurfOn, day: st.day, slots: cfg.autoSurfOn ? st.slots : [], done: st.done, runs: st.runs.slice(0, 15), gate: gateKind(cfg) !== 'builtin' };
@@ -316,8 +320,19 @@ async function postAction(body, ctx) {
       saveInbox(st);
       return { changed: n };
     }
+    case 'asrSave': return saveAsr({ mode: body.mode, baseUrl: body.baseUrl, model: body.model, key: body.key, language: body.language, start: body.start });
+    case 'asrClear': return clearAsr();
+    case 'asrTest': return testAsr();
+    case 'dshqqCheck': {
+      if (!cfg.qqBridgeDir) throw new Error('还没填 dsh-qq 桥接目录（填好先保存）');
+      return { check: await checkBridge(cfg.qqBridgeDir), patches: patchStatus(cfg.qqBridgeDir) };
+    }
+    case 'dshqqPatch': {
+      if (!cfg.qqBridgeDir) throw new Error('还没填 dsh-qq 桥接目录（填好先保存）');
+      return { steps: applyPatches(cfg.qqBridgeDir, { revert: body.revert === true }) };
+    }
     case 'gateTest': {
-      if (gateKind(cfg) === 'builtin') throw new Error('现在用的是内置门卫（没填门卫地址，也没有桥接提供门卫服务）');
+      if (gateKind(cfg) === 'builtin') throw new Error(cfg.gateMode === 'dsh-qq' ? '门卫来源选了 dsh-qq，但还没填桥接目录' : '现在用的是内置门卫（没填门卫地址，也没有桥接提供门卫服务）');
       const t = Date.now();
       const hi = await hello(cfg);
       const c = await sessionContext(cfg, 'gate-test');

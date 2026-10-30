@@ -512,8 +512,38 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
       });
     }
 
+    // 语音识别：读写 ~/.dsh/asr.json（和 dsh-video-storyboard 共用）。key 只能写，不会读回来
+    function AsrCard({ toast }) {
+      const st = useView('asr');
+      const [f, setF] = useState(null);
+      const [busy, setBusy] = useState(false);
+      useEffect(() => { if (st.data) setF({ mode: st.data.mode === 'custom' ? 'custom' : 'siliconflow', baseUrl: st.data.mode === 'custom' ? st.data.baseUrl : '', model: st.data.mode === 'custom' ? st.data.model : '', key: '', start: (st.data.start ?? []).join('\n') }); }, [st.data]);
+      const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+      const save = () => { setBusy(true); api.post('asrSave', { ...f, start: f.start.split(/\r?\n/).map((x) => x.trim()).filter(Boolean) }).then(() => { toast('语音识别已保存'); st.reload(); }, (e) => toast(e.message, true)).finally(() => setBusy(false)); };
+      const test = () => { setBusy(true); api.post('asrTest').then((r) => toast(`${r.ok ? '✓' : '✗'} ${r.message}${r.ms != null ? `（${fmtMs(r.ms)}）` : ''}`, !r.ok), (e) => toast(e.message, true)).finally(() => setBusy(false)); };
+      const clear = () => api.post('asrClear').then(() => { toast('已清除（原文件改名成 asr.json.bak）'); st.reload(); }, (e) => toast(e.message, true));
+      return h(Card, { title: '语音识别', desc: '没字幕的视频靠它出台词。登录 B站 后大多数视频有 AI 字幕，用不上它；没配也能看，只是没台词。配置存在 ~/.dsh/asr.json，和 dsh-video-storyboard 共用。' },
+        h(Loading, { state: st }, (d) => f && h(React.Fragment, null,
+          h('div', { className: d.configured ? 'be-ok' : 'be-faint' }, d.configured ? `✓ 现在用的是：${d.mode === 'siliconflow' ? '硅基流动' : d.baseUrl}（${d.model}）${d.start.length ? '，用到时自动启动' : ''}` : '还没配置'),
+          h('div', { className: 'be-seg', role: 'group' }, [['siliconflow', '硅基流动（云端）'], ['custom', '本机或自建服务']].map(([k, l]) => h('button', { key: k, type: 'button', 'aria-pressed': f.mode === k, onClick: () => setF({ ...f, mode: k }) }, l))),
+          f.mode === 'siliconflow'
+            ? h('div', { className: 'be-fields' },
+              h(Field, { label: 'API Key', hint: `在 cloud.siliconflow.cn 注册后创建。模型是 FunAudioLLM/SenseVoiceSmall，中文效果好、速度快${d.mode === 'siliconflow' && d.hasKey ? '；已经填过，留空就保持不变' : ''}` },
+                h('input', { className: 'be-input mono', type: 'password', autoComplete: 'off', value: f.key, placeholder: d.mode === 'siliconflow' && d.hasKey ? '（已填）' : 'sk-…', onChange: set('key') })))
+            : h('div', { className: 'be-fields' },
+              h(Field, { label: '服务地址', hint: 'OpenAI 兼容的转写接口，填到 /v1 为止，比如 http://127.0.0.1:8000/v1' }, h('input', { className: 'be-input mono', value: f.baseUrl, placeholder: 'http://127.0.0.1:8000/v1', onChange: set('baseUrl') })),
+              h(Field, { label: '模型名', hint: '服务端认的模型名，比如 SenseVoiceSmall、whisper-1' }, h('input', { className: 'be-input mono', value: f.model, onChange: set('model') })),
+              h(Field, { label: 'API Key', hint: '本机服务一般不用填；留空就保持原来的' }, h('input', { className: 'be-input mono', type: 'password', autoComplete: 'off', value: f.key, placeholder: d.hasKey ? '（已填）' : '可选', onChange: set('key') })),
+              h(Field, { label: '用到时自动启动（可选）', hint: '启动服务的命令，一行一个参数（第一行是程序）。填了的话，有视频需要转写时才拉起，闲置 10 分钟后关掉', wide: true },
+                h('textarea', { className: 'be-input mono', rows: 3, value: f.start, spellCheck: false, onChange: set('start'), style: { resize: 'vertical' } }))),
+          h('div', { className: 'be-row' },
+            h(Btn, { kind: 'primary', disabled: busy, onClick: save }, '保存'),
+            d.configured && h(Btn, { disabled: busy, onClick: test }, '测试'),
+            d.mode !== 'none' && h(ConfirmBtn, { label: '清除配置', confirmLabel: '确认清除？', onConfirm: clear })))));
+    }
+
     function Settings({ toast }) {
-      return h(ConfigGroups, { groups: GROUPS, toast, footer: true });
+      return h(React.Fragment, null, h(AsrCard, { toast }), h(ConfigGroups, { groups: GROUPS, toast, footer: true }));
     }
 
     // ── 冲浪 ─────────────────────────────────────────────────────────────────
@@ -646,10 +676,34 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
               }))
               : h('div', { className: 'be-empty' }, d.started ? '还没有新消息。' : '还没查过：点「现在查一次」先记下现在的位置。')))),
         h(ConfigGroups, {
-          groups: [['inbox', '收件箱设置', '多久查一次、什么时候不查、每小时最多打扰几次。'], ['gate', '门卫', '告诉插件「这个会话是不是主人本人」「主人说过什么」，并把收件箱的新消息转达出去。不填地址时用内置门卫：按会话的 agentPreset 和工作目录判断是不是桥接会话，本机会话「先问主人」时弹 DSH 审批卡片。协议见 docs/门卫协议.md。']],
+          groups: [['inbox', '收件箱设置', '多久查一次、什么时候不查、每小时最多打扰几次。'], ['gate', '门卫', '告诉插件「这个会话是不是主人本人」「主人说过什么」，并把收件箱的新消息和推荐转达到 QQ。用 dsh-qq 桥接的，选「dsh-qq」填桥接目录就行；别的桥接按 docs/门卫协议.md 接；都没有时用内置门卫（按会话的 agentPreset 和工作目录判断，本机会话「先问主人」时弹 DSH 审批卡片）。']],
           toast,
-          actions: { gate: (saved) => saved.gateUrl && h(Btn, { onClick: () => api.post('gateTest').then((r) => toast(`门卫正常（${fmtMs(r.ms)}）：${r.label}`), (e) => toast(e.message, true)) }, '测试门卫') },
+          actions: { gate: (saved) => h(React.Fragment, null,
+            (saved.gateMode !== 'builtin') && h(Btn, { onClick: () => api.post('gateTest').then((r) => toast(`门卫正常（${fmtMs(r.ms)}）：${r.label}`), (e) => toast(e.message, true)) }, '测试门卫'),
+            saved.qqBridgeDir && h(DshQq, { toast })) },
         }));
+    }
+
+    // dsh-qq 桥接：检查连不连得上、三个补丁打没打（工具白名单、分享卡片、偶发报错）；一键适配 / 还原
+    const PATCH_TEXT = { patched: '已打', original: '没打', unknown: '桥接版本变了，认不出' };
+    function DshQq({ toast }) {
+      const [st, setSt] = useState(null);
+      const [busy, setBusy] = useState(false);
+      const check = () => api.post('dshqqCheck').then(setSt, (e) => toast(e.message, true));
+      useEffect(() => { check(); }, []);
+      const patch = (revert) => { setBusy(true); api.post('dshqqPatch', { revert }).then((r) => { toast(`${r.steps.map((x) => x.text).join('；')}。改完要在桥接控制中心重启桥接`, r.steps.some((x) => x.result === 'fail')); check(); }, (e) => toast(e.message, true)).finally(() => setBusy(false)); };
+      if (!st) return null;
+      const p = st.patches;
+      const all = p?.ok && !p.whitelist.missing.length && p.card === 'patched' && p.errors === 'patched';
+      return h('div', { style: { width: '100%', display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 } },
+        h('div', { className: st.check.ok ? 'be-ok' : 'be-no' }, st.check.ok ? `✓ dsh-qq 桥接连得上（主人 QQ ${st.check.ownerQQ}，${st.check.sessions} 个会话）` : `✗ ${st.check.problems.join('；')}`),
+        p?.ok
+          ? h('div', { className: 'be-faint' }, `补丁：工具白名单${p.whitelist.missing.length ? `缺 ${p.whitelist.missing.length} 个` : '已加'} · 分享卡片${PATCH_TEXT[p.card]} · 偶发报错不发群里${PATCH_TEXT[p.errors]}`)
+          : h('div', { className: 'be-no' }, p?.error ?? ''),
+        p?.ok && h('div', { className: 'be-row' },
+          !all && h(Btn, { kind: 'primary', disabled: busy, onClick: () => patch(false) }, '一键适配'),
+          h(ConfirmBtn, { label: '还原补丁', confirmLabel: '确认还原？', disabled: busy, onConfirm: () => patch(true) }),
+          h('span', { className: 'be-faint' }, '会改桥接的源码（先备份成 .bak-bili-eyes），改完要重启桥接')));
     }
 
     // ── 互动 ─────────────────────────────────────────────────────────────────

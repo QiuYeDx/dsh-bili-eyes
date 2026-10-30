@@ -1,13 +1,19 @@
-// 门卫：回答「这个会话是不是主人本人」「主人说过什么」，并转达收件箱。按顺序用第一个有的：
-//   1. 进程内服务：跑在 DSH 里的桥接插件 ctx.set('biliEyesGate', {...}) 提供
-//   2. HTTP 门卫：设置里的 gateUrl（本机接口）
-//   3. 内置：按会话的 agentPreset / cwd 推断是不是桥接会话。这是推断，不是认证；
-//      可信会话的「先问主人」走 DSH 原生审批卡片，不可信的只能在设置页同意。
+// 门卫：回答「这个会话是不是主人本人」「主人说过什么」，并转达收件箱。设置里的「门卫来源」（gateMode）：
+//   auto（默认）按顺序用第一个有的：
+//     1. 进程内服务：跑在 DSH 里的桥接插件 ctx.set('biliEyesGate', {...}) 提供
+//     2. HTTP 门卫：设置里的 gateUrl（本机接口）
+//     3. 内置：按会话的 agentPreset / cwd 推断是不是桥接会话。这是推断，不是认证；
+//        可信会话的「先问主人」走 DSH 原生审批卡片，不可信的只能在设置页同意。
+//   dsh-qq：插件自己当 dsh-qq 桥接的门卫（adapters/dsh-qq.js），读桥接目录、调 OneBot 和桥接控制台
+//   builtin：只用内置的
 // 协议（动作、字段、返回值）见 docs/门卫协议.md。门卫没响应、返回不对时一律按「不可信 / 没同意 / 没转达」处理。
 export const PROTOCOL = 1;
 export const SERVICE_NAME = 'biliEyesGate';
 export const DEFAULT_UNTRUSTED_PRESETS = 'qq|wechat|weixin|wx|onebot|napcat|bot|group';
+import { dshQqGate } from './adapters/dsh-qq.js';
+
 const TIMEOUT_MS = 3000;
+const NOTIFY_TIMEOUT_MS = 20_000;   // 转达要改写定时任务再运行一次，比问一句慢
 
 // ── 宿主（index.js 在 apply 时绑上；命令行和测试里没有）────────────────────
 let host = null;
@@ -29,21 +35,28 @@ export async function gateCall(cfg, body, { fetchImpl = fetch, timeoutMs = TIMEO
   return r.json();
 }
 
-/** 现在用的是哪种门卫：'service' | 'http' | 'builtin'。 */
+/** 现在用的是哪种门卫：'service' | 'dsh-qq' | 'http' | 'builtin'。 */
 export function gateKind(cfg, opts = {}) {
-  if (opts.service ?? hostGet(SERVICE_NAME)) return 'service';
+  if (opts.service) return 'service';
+  if (cfg.gateMode === 'builtin') return 'builtin';
+  if (cfg.gateMode === 'dsh-qq') return cfg.qqBridgeDir ? 'dsh-qq' : 'builtin';
+  if (hostGet(SERVICE_NAME)) return 'service';
   return cfg.gateUrl ? 'http' : 'builtin';
 }
 
+const hostLog = (m) => { try { host?.logger?.info?.(`[dsh-bili-eyes] ${m}`); } catch { /* 忽略 */ } };
+
 async function call(cfg, body, opts = {}) {
-  const svc = opts.service ?? hostGet(SERVICE_NAME);
+  const kind = gateKind(cfg, opts);
+  const timeoutMs = opts.timeoutMs ?? (body.action === 'notify' ? NOTIFY_TIMEOUT_MS : TIMEOUT_MS);
+  const svc = opts.service ?? (kind === 'dsh-qq' ? dshQqGate(cfg, { log: hostLog }) : kind === 'service' ? hostGet(SERVICE_NAME) : null);
   if (svc) {
     if (typeof svc[body.action] !== 'function') throw new Error(`门卫服务不支持 ${body.action}`);
     let timer;
-    const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('门卫服务超时')), opts.timeoutMs ?? TIMEOUT_MS); });
+    const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('门卫服务超时')), timeoutMs); });
     try { return await Promise.race([svc[body.action](body), timeout]); } finally { clearTimeout(timer); }
   }
-  return gateCall(cfg, body, opts);
+  return gateCall(cfg, body, { ...opts, timeoutMs });
 }
 
 // ── 会话 ──────────────────────────────────────────────────────────────────

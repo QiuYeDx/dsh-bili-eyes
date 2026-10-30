@@ -306,7 +306,7 @@ export async function request(req, { cfg, client, sessionId = '', session = null
   }
   // 主人刚刚自己要她做这件事（「在 b站关注我一下」「帮我点个赞」）：这句话本身就是同意，不用再问一遍。
   // 只认门卫给的主人原话（群友说的不算），5 分钟内、不是问句、没有否定、点名了这类操作。
-  if ((ctx.gate === 'http' || ctx.gate === 'service') && via === 'tool') {
+  if (ctx.gate !== 'builtin' && ctx.gate !== 'background' && via === 'tool') {
     const recent = await ownerMessages(cfg, session ? { sessionId, session } : sessionId, now - OWNER_ASK_MS, gateOpts);
     const asked = recent && ownerAsked(recent, kind);
     if (asked) return send({ kind, payload: req.payload, preview: req.preview, target: { ...req.target, asked: clip(asked, 40) } }, { cfg, client, entries, now, auditFile, draftsFile, how: 'owner-asked' });
