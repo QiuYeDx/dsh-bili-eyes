@@ -369,7 +369,7 @@ export async function request(req, { cfg, client, sessionId = '', session = null
   audit({ kind, status: 'draft', draft: draft.id, target: req.target, text: req.payload?.text, where: ctx.label }, auditFile);
   const how = ctx.gate !== 'builtin'
     ? `用你自己的话问主人一句（说清楚要${KIND_TEXT[kind]}什么）。主人回一句同意的话就行，比如${yesExamples(kind)}，不用说特定的词，也别要求主人说某个词；主人同意后调用 bili_confirm({draft: ${draft.id}})。主人说不要就调用 bili_confirm({draft: ${draft.id}, decision: "drop"})。`
-    : '要主人在 DSH 设置页「B站看视频 → 互动 → 待同意」里点同意才会发出，跟主人说一声就好。';
+    : '要主人在 DSH 设置页「B站伙伴 → 互动 → 待同意」里点同意才会发出，跟主人说一声就好。';
   const why = mode === 'auto' && kind === 'follow' && !req.watched ? '最近 14 天没看过这个 UP 主的视频，所以要先问主人。' : '';
   return { status: 'draft', draft, text: `还没${KIND_TEXT[kind]}，先起草了 #${draft.id}：${clip(req.preview, 80)}。${why}${how}` };
 }

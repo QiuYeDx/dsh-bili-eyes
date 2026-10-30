@@ -3,7 +3,7 @@
 //   逛：bili_feed、bili_comments、bili_surf、bili_inbox（只读）
 //   写：bili_like、bili_fav、bili_comment、bili_dm、bili_post、bili_follow、bili_confirm（默认全关，设置页逐项打开；规则在 act.js）
 // 工具结果 = 图片（附件）+ 文字素材。图片必须先经 ctx.attachments.saveImage() 提交才能放进结果。
-// 设置页界面在 src/client.js（DSH 设置侧边栏的「B站看视频」），接口在 src/api.js。收件箱在后台定时查（interact.js）。
+// 设置页界面在 src/client.js（DSH 设置侧边栏的「B站伙伴」），接口在 src/api.js。收件箱在后台定时查（interact.js）。
 import { look, lookZoom, find, InputError } from './look.js';
 import { feed, comments } from './feed.js';
 import { surf } from './surf.js';

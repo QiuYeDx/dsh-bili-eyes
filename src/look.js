@@ -489,7 +489,8 @@ export function tracked(kind, impl, describe) {
       const { up, ...meta } = r.meta ?? {};
       // 她自己看的才算「看过这个 UP 主」（设置页试看是主人在看）
       if (kind === 'look' && up?.mid && source !== 'ui') rememberUp({ ...up, bvid: meta.bvid, title: meta.title, how: 'look' });
-      record({ kind, source, ok: true, cached: Boolean(r.cached), ms: Date.now() - t, ...meta });
+      // 设置页里刷列表只是主人在翻，不记（每次打开「刷列表」都会读一次，记下来会把记录刷满）
+      if (!(kind === 'feed' && source === 'ui')) record({ kind, source, ok: true, cached: Boolean(r.cached), ms: Date.now() - t, ...meta });
       return r;
     } catch (e) {
       record({ kind, source, ok: false, ms: Date.now() - t, title: clip(describe(args ?? {}), 80), error: clip(e?.message ?? e, 160) });

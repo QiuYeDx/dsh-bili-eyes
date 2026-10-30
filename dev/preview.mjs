@@ -24,4 +24,4 @@ http.createServer((req, res) => {
     return res.end(fs.readFileSync(path.join(HERE, 'preview.html')));
   }
   res.writeHead(404); res.end();
-}).listen(port, '127.0.0.1', () => console.log(`B站看视频 设置页预览：http://127.0.0.1:${port}`));
+}).listen(port, '127.0.0.1', () => console.log(`B站伙伴 设置页预览：http://127.0.0.1:${port}`));

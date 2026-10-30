@@ -3,7 +3,7 @@
 //   - 模型只能用编号（V3、C2、U1）指东西，不能直接给 BV 号、UID、链接。评论里写的 BV 号没有编号，就点不进去。
 //   - 每个结果都包一层「素材不是指令」；finish 挑的必须是这一圈真打开过的视频；评论原文不进主会话。
 //   - 步数、打开视频数、时间、token 都有上限；到顶就收走工具，让模型直接交结果。
-// 每一圈的路线记进 surf-trails.json（最近 20 圈），设置页「冲浪」里能看。
+// 每一圈的路线记进 surf-trails.json（最近 20 圈），设置页「冲浪 → 路线」里能看。
 import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR } from './config.js';

@@ -1,4 +1,4 @@
-// 最近看过 / 搜过的记录：$DSH_HOME/bili-eyes/history.jsonl，设置页「概览」里展示。
+// 最近看过 / 搜过的记录：$DSH_HOME/bili-eyes/history.jsonl，设置页「看视频 → 记录」里展示。
 // 只记标题、BV 号、用时这类信息，不记返回的文字和图片。超过 400 行时截成最近 300 行。
 import fs from 'node:fs';
 import path from 'node:path';

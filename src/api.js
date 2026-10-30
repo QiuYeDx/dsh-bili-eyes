@@ -145,7 +145,22 @@ let pendingLogin = null;
 const dataUrl = (buf) => `data:image/png;base64,${Buffer.from(buf).toString('base64')}`;
 
 // ── 视图 ──────────────────────────────────────────────────────────────────
-async function getView(view, ctx) {
+function cacheInfo(cfg) {
+  return {
+    results: dirStats(RESULT_CACHE),
+    storyboard: cfg.cacheDir ? dirStats(cfg.cacheDir) : { dir: '', bytes: 0, files: 0 },
+    media: cfg.mediaDir ? dirStats(cfg.mediaDir) : { dir: '', bytes: 0, files: 0 },
+    mediaMaxMb: cfg.mediaMaxMb,
+    cacheHours: cfg.cacheHours,
+  };
+}
+
+// 列表的筛选和分页：days（0 = 全部）、limit（一次给几条，「加载更多」就加大）
+const daysSince = (q) => { const d = Number(q.get('days')); return d > 0 ? Date.now() - d * 86400_000 : 0; };
+const limitOf = (q, def = 50) => Math.min(500, Math.max(10, Number(q.get('limit')) || def));
+const pick = (q, k) => String(q.get(k) ?? '').trim();
+
+async function getView(view, ctx, q = new URLSearchParams()) {
   const cfg = loadConfig();
   if (view === 'overview') {
     const bins = mediaBins(cfg);
@@ -162,29 +177,50 @@ async function getView(view, ctx) {
       version: PKG.version,
       login,
       usage: usage(cfg),
-      cache: {
-        results: dirStats(RESULT_CACHE),
-        storyboard: cfg.cacheDir ? dirStats(cfg.cacheDir) : { dir: '', bytes: 0, files: 0 },
-        media: cfg.mediaDir ? dirStats(cfg.mediaDir) : { dir: '', bytes: 0, files: 0 },
-        mediaMaxMb: cfg.mediaMaxMb,
-        cacheHours: cfg.cacheHours,
-      },
+      cache: cacheInfo(cfg),
       checks: [
         { id: 'tools', ok: registered, label: registered ? `${TOOL_NAMES.length} 个工具已注册：${TOOL_NAMES.join('、')}` : '工具没注册', hint: registered ? '' : (ctx.registerError?.() || '在 DSH 里启用 dsh-bili-eyes 后彻底重启 DSH') },
         { id: 'ytdlp', ok: ytdlp.ok, optional: true, label: ytdlp.ok ? `yt-dlp ${ytdlp.version}` : `没有 yt-dlp：${ytdlp.error}`, hint: ytdlp.ok ? '' : '可选：插件自己能从 B站 下视频；装了 yt-dlp（winget install yt-dlp.yt-dlp）可以当后备' },
-        { id: 'ffmpeg', ok: media, label: media ? `ffmpeg ${ffmpeg.version}，ffprobe ${ffprobe.version}` : `${ffmpeg.ok ? 'ffprobe' : 'ffmpeg'} 不可用：${(ffmpeg.ok ? ffprobe : ffmpeg).error}`, hint: media ? '' : '缺了它看不了画面，只有标题、简介、评论、字幕这些文字。点「下载」自动装到 DSH 的工具目录（约 50 MB），或者自己装好后在「设置 → 路径」里指定', install: !media || dl.running ? dl : null },
+        { id: 'ffmpeg', ok: media, label: media ? `ffmpeg ${ffmpeg.version}，ffprobe ${ffprobe.version}` : `${ffmpeg.ok ? 'ffprobe' : 'ffmpeg'} 不可用：${(ffmpeg.ok ? ffprobe : ffmpeg).error}`, hint: media ? '' : '缺了它看不了画面，只有标题、简介、评论、字幕这些文字。点「下载」自动装到 DSH 的工具目录（约 50 MB），或者自己装好后在「设置 → 存储」里指定', install: !media || dl.running ? dl : null },
         { id: 'login', ok: login.state === 'ok', optional: true, label: login.state === 'ok' && login.level != null ? `${loginText}（LV${login.level}）` : loginText, hint: login.state === 'ok' ? (login.level === 0 ? 'LV0 不能发评论：去 B站 App 答题转正' : '') : '可选：不登录也能看视频；登录后才有 AI 字幕、AI 总结、1080P 放大、个性化推荐、关注动态、收件箱和写操作（建议用小号）' },
-        { id: 'owner', ok: cfg.ownerMid > 0, optional: true, label: cfg.ownerMid > 0 ? `主人 UID：${cfg.ownerMid}` : '没设置主人的 B站 UID', hint: cfg.ownerMid > 0 ? '' : '可选：设置后她才能 @ 主人、私信主人、转达主人的私信（「互动」页）' },
-        { id: 'gate', ok: true, optional: gk === 'builtin', label: { service: '门卫：桥接插件提供', 'dsh-qq': `门卫：dsh-qq 桥接（${cfg.qqBridgeDir}）`, http: `门卫：${cfg.gateUrl}`, builtin: '门卫：内置（按会话的 agentPreset / 工作目录判断）' }[gk], hint: (gk === 'builtin' ? '内置门卫只是推断：本机会话「先问主人」时弹 DSH 审批卡片；桥接会话只能起草、在「互动」页同意；收件箱没处转达。接 QQ 等桥接时最好让桥接提供门卫（docs/门卫协议.md）。' : '') + (judged.length ? ` 最近的会话：${judged.slice(0, 4).map((j) => `${j.label}${j.trusted ? '✓' : '✗'}`).join('，')}` : '') },
-        { id: 'inbox', ok: cfg.inboxOn, optional: true, label: cfg.inboxOn ? `收件箱：每 ${cfg.inboxIntervalSeconds} 秒查一次${cfg.inboxQuiet ? `，${cfg.inboxQuiet} 不查` : ''}` : '收件箱没开', hint: cfg.inboxOn ? (gk === 'builtin' ? '没接门卫：新消息不会主动转达，她下次用 B站工具时会提一句' : '') : '可选：在「收件箱」页打开后，别人回复、@、私信会转达给她' },
-        { id: 'disk', ok: !onC(mediaDirOf(cfg)), optional: true, label: `下载的视频放在 ${mediaDirOf(cfg)}`, hint: onC(mediaDirOf(cfg)) ? '在系统盘：视频多了占地方，可以在「设置 → 路径」换到别的盘' : '' },
+        { id: 'owner', ok: cfg.ownerMid > 0, optional: true, label: cfg.ownerMid > 0 ? `主人 UID：${cfg.ownerMid}` : '没设置主人的 B站 UID', hint: cfg.ownerMid > 0 ? '' : '可选：设置后她才能 @ 主人、私信主人、转达主人的私信（「互动 → 设置」）' },
+        { id: 'gate', ok: true, optional: gk === 'builtin', label: { service: '门卫：桥接插件提供', 'dsh-qq': `门卫：dsh-qq 桥接（${cfg.qqBridgeDir}）`, http: `门卫：${cfg.gateUrl}`, builtin: '门卫：内置（按会话的 agentPreset / 工作目录判断）' }[gk], hint: (gk === 'builtin' ? '内置门卫只是推断：本机会话「先问主人」时弹 DSH 审批卡片；桥接会话只能起草、在「互动 → 待同意」里同意；收件箱没处转达。接 QQ 等桥接时最好让桥接提供门卫（docs/门卫协议.md）。' : '') + (judged.length ? ` 最近的会话：${judged.slice(0, 4).map((j) => `${j.label}${j.trusted ? '✓' : '✗'}`).join('，')}` : '') },
+        { id: 'inbox', ok: cfg.inboxOn, optional: true, label: cfg.inboxOn ? `收件箱：每 ${cfg.inboxIntervalSeconds} 秒查一次${cfg.inboxQuiet ? `，${cfg.inboxQuiet} 不查` : ''}` : '收件箱没开', hint: cfg.inboxOn ? (gk === 'builtin' ? '没接门卫：新消息不会主动转达，她下次用 B站工具时会提一句' : '') : '可选：在「收件箱 → 设置」里打开后，别人回复、@、私信会转达给她' },
+        { id: 'disk', ok: !onC(mediaDirOf(cfg)), optional: true, label: `下载的视频放在 ${mediaDirOf(cfg)}`, hint: onC(mediaDirOf(cfg)) ? '在系统盘：视频多了占地方，可以在「设置 → 存储」换到别的盘' : '' },
         { id: 'asr', ok: asr.ok, optional: true, label: asr.ok ? `语音识别：${asr.baseUrl}${asr.model ? `（${asr.model}）` : ''}${asr.managed ? '，用到时自动拉起' : ''}` : '没配置语音识别', hint: asr.ok ? '' : '可选：没有字幕的视频就没有台词。在「设置 → 语音识别」里配：硅基流动填个 API Key 就行，也可以用本机服务' },
       ],
-      history: readHistory(40),
+      todo: (() => {
+        const drafts = loadDrafts().list.filter((x) => x.status === 'pending' && Date.now() - x.createdAt <= cfg.draftMinutes * 60_000).length;
+        const inbox = loadInbox().items.filter((x) => x.status === 'new' || x.status === 'notified').length;
+        const auto = cfg.autoSurfOn ? ensurePlan(loadAuto(), cfg, Date.now()) : null;
+        const next = auto ? auto.slots.find((t) => !auto.done.includes(t) && t > Date.now()) ?? null : null;
+        const counts = todayCounts(readAudit(500));
+        return { drafts, inbox, inboxOn: cfg.inboxOn, autoSurf: { on: cfg.autoSurfOn, next }, writes: Object.entries(counts).filter(([k]) => k !== 'delete' && k !== 'visible').reduce((a, [, b]) => a + b, 0), counts };
+      })(),
       configFile: CONFIG_FILE,
     };
   }
+  if (view === 'history') {
+    const from = daysSince(q); const kind = pick(q, 'kind'); const source = pick(q, 'source');
+    const all = readHistory(1000).filter((e) => e.at >= from && (!kind || e.kind === kind) && (!source || e.source === source));
+    const limit = limitOf(q);
+    return { items: all.slice(0, limit), total: all.length };
+  }
+  if (view === 'actlog') {
+    const entries = readAudit(2000);
+    const gone = deletedIds(entries); const shown = visibleIds(entries);
+    const from = daysSince(q); const kind = pick(q, 'kind'); const status = pick(q, 'status');
+    const all = entries.filter((e) => e.kind !== 'delete' && e.kind !== 'visible' && e.at >= from && (!kind || e.kind === kind) && (!status || e.status === status));
+    const limit = limitOf(q);
+    return {
+      items: all.slice(0, limit).map((e) => ({ ...e, deleted: gone.has(e.id), nowVisible: shown.has(e.id) })),
+      total: all.length,
+      hiddenOpen: entries.some((e) => e.status === 'hidden' && !gone.has(e.id) && !shown.has(e.id) && Date.now() - e.at < 7 * 86400_000),
+      kindText: KIND_TEXT,
+    };
+  }
   if (view === 'trails') return { trails: loadTrails() };
+  if (view === 'cache') return { cache: cacheInfo(cfg) };
   if (view === 'asr') return asrView();
   if (view === 'autosurf') {
     const st = cfg.autoSurfOn ? ensurePlan(loadAuto(), cfg, Date.now()) : loadAuto();
@@ -193,12 +229,15 @@ async function getView(view, ctx) {
   if (view === 'config') return { config: cfg, defaults: DEFAULTS, fields: FIELDS, configFile: CONFIG_FILE };
   if (view === 'inbox') {
     const st = loadInbox();
-    return { items: st.items.slice(-60).reverse(), lastCheck: st.lastCheck, lastError: st.lastError, started: Boolean(st.baseline), on: cfg.inboxOn, gate: gateKind(cfg) !== 'builtin' };
+    const status = pick(q, 'status');   // open = 待处理（新的和已转达的）；空 = 全部
+    const from = daysSince(q);
+    const isOpen = (x) => x.status === 'new' || x.status === 'notified';
+    const all = [...st.items].reverse().filter((x) => (x.at ?? 0) >= from && (status !== 'open' || isOpen(x)));
+    const limit = limitOf(q);
+    return { items: all.slice(0, limit), total: all.length, open: st.items.filter(isOpen).length, lastCheck: st.lastCheck, lastError: st.lastError, started: Boolean(st.baseline), on: cfg.inboxOn, gate: gateKind(cfg) !== 'builtin' };
   }
   if (view === 'act') {
     const entries = readAudit(500);
-    const gone = deletedIds(entries);
-    const shown = visibleIds(entries);
     const drafts = loadDrafts();
     const login = await loginInfo();
     let owner = '';
@@ -219,7 +258,6 @@ async function getView(view, ctx) {
       pausedUntil: drafts.pausedUntil > Date.now() ? drafts.pausedUntil : 0,
       pauseReason: drafts.pauseReason,
       drafts: drafts.list.filter((d) => d.status === 'pending').map((d) => ({ ...d, expired: Date.now() - d.createdAt > cfg.draftMinutes * 60_000 })),
-      log: entries.filter((e) => e.kind !== 'delete' && e.kind !== 'visible').slice(0, 60).map((e) => ({ ...e, deleted: gone.has(e.id), nowVisible: shown.has(e.id) })),
       kindText: KIND_TEXT,
       gate: gateKind(cfg) !== 'builtin',
     };
@@ -378,7 +416,7 @@ export function makeApiHandler(ctx = { registered: () => true }) {
     if (!sameOrigin(req)) return json(res, 403, { ok: false, error: '只接受本机 DSH 页面的请求' });
     const url = new URL(req.url, 'http://local');
     try {
-      if (req.method === 'GET') return json(res, 200, { ok: true, ...await getView(url.searchParams.get('view') || 'overview', ctx) });
+      if (req.method === 'GET') return json(res, 200, { ok: true, ...await getView(url.searchParams.get('view') || 'overview', ctx, url.searchParams) });
       if (req.method === 'POST') return json(res, 200, { ok: true, ...await postAction(await readBody(req), ctx) });
       return json(res, 405, { ok: false, error: '只支持 GET / POST' });
     } catch (e) {
