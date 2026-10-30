@@ -1,7 +1,7 @@
 {
   "name": "dsh-bili-eyes",
-  "version": "0.5.2",
-  "description": "DeepSeek Harness 插件：让模型「看」B站视频（分镜图 + 台词 + 热评 + 弹幕热词）、搜视频、逛 B站（推荐 / 热门 / 评论区 / 摘要式冲浪）、看收件箱；点赞、评论、私信、动态默认关闭，可按档位和额度开启并由主人同意。DSH 设置里带管理界面。",
+  "version": "0.6.0",
+  "description": "DeepSeek Harness 插件：让模型「看」B站视频（分镜图 + 台词 + 热评 + 弹幕热词）、搜视频、顺着线索逛 B站、看收件箱；点赞、评论、私信、动态、关注默认关闭，可按档位和额度开启并由主人同意。装上就能用：自己下载视频，ffmpeg 可一键下载。DSH 设置里带管理界面。",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -21,7 +21,9 @@
     "./client": "./src/client.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json",
-    "./interact": "./src/interact.js"
+    "./interact": "./src/interact.js",
+    "./tool-list": "./src/tool-list.js",
+    "./gate": "./src/gate.js"
   },
   "bin": {
     "dsh-bili-eyes": "./bin/cli.mjs"
@@ -29,7 +31,8 @@
   "files": [
     "src",
     "bin",
-    "docs",
+    "docs/门卫协议.md",
+    "docs/冲浪与互动-设计.md",
     "locale",
     "assets",
     "cordis.patch.yml",
@@ -41,7 +44,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test/unit.test.mjs test/contract.test.mjs test/settings.test.mjs test/interact.test.mjs",
+    "test": "node --test test/unit.test.mjs test/contract.test.mjs test/settings.test.mjs test/interact.test.mjs test/surf-agent.test.mjs test/auto-surf.test.mjs",
     "login": "node bin/cli.mjs login",
     "status": "node bin/cli.mjs status",
     "preview": "node dev/preview.mjs"

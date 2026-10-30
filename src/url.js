@@ -28,7 +28,8 @@ function fromUrl(u) {
 
 /** 解析模型传进来的 url 参数。返回 {kind:'video', bvid|aid, page} 或 {kind:'short', url}。 */
 export function parseInput(raw) {
-  const text = String(raw ?? '').trim();
+  // QQ 小程序 / 结构化分享卡片是一段 JSON，链接在 qqdocurl、jumpUrl 里，斜杠转义成了 \/、& 写成 &amp;
+  const text = String(raw ?? '').trim().replace(/\\\//g, '/').replace(/&amp;/g, '&');
   if (!text) throw new InputError('没有给链接');
   if (/^[a-zA-Z]:[\\/]|^\\\\|^\/|^file:/i.test(text)) throw new InputError('只能看 B站视频链接，不能读本机文件');
   if (/^BV[0-9A-Za-z]{10}$/.test(text)) return { kind: 'video', bvid: text, page: 1 };

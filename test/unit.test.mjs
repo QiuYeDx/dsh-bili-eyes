@@ -21,6 +21,20 @@ test('搜索结果解析与清单', async () => {
   await assert.rejects(find({ query: '字'.repeat(51) }), /50/);
 });
 
+test('parseInput：QQ 小程序卡片 JSON 里的 qqdocurl', () => {
+  const card = JSON.stringify({ app: 'com.tencent.miniapp_01', meta: { detail_1: { title: '哔哩哔哩', preview: 'https://pubminishare-30161.picsz.qpic.cn/x.png', qqdocurl: 'https://b23.tv/AbC123x?share_medium=android&share_source=qq', url: 'm.q.qq.com/a/s/123' } } }).replace(/\//g, '\\/');
+  assert.deepEqual(parseInput(card), { kind: 'short', url: 'https://b23.tv/AbC123x' });
+  const news = '{"app":"com.tencent.structmsg","meta":{"news":{"jumpUrl":"https:\\/\\/www.bilibili.com\\/video\\/BV1SPaQ65Esg?p=2&amp;share_source=qq"}}}';
+  assert.deepEqual(parseInput(news), { kind: 'video', bvid: 'BV1SPaQ65Esg', page: 2 });
+});
+
+test('工具清单：读写分开，和注册的工具一致', async () => {
+  const { READ_TOOLS, WRITE_TOOLS, ALL_TOOLS } = await import('../src/tool-list.js');
+  const { toolSpecs } = await import('../src/index.js');
+  assert.deepEqual([...ALL_TOOLS].sort(), Object.values(toolSpecs()).map((s) => s.name).sort());
+  assert.ok(!READ_TOOLS.some((t) => WRITE_TOOLS.includes(t)));
+});
+
 test('parseInput：各种 B站写法', () => {
   assert.deepEqual(parseInput('BV1SPaQ65Esg'), { kind: 'video', bvid: 'BV1SPaQ65Esg', page: 1 });
   assert.deepEqual(parseInput('av170001'), { kind: 'video', aid: 170001, page: 1 });
@@ -114,4 +128,28 @@ test('长视频分几张图、超时放宽', () => {
   assert.deepEqual([timeoutFor(60), timeoutFor(1747), timeoutFor(7200)], [150, 308, 600]);
   const r = { transcript: { source: 'file' }, sheets: [{ sheet: 1, cells: [{ i: 1, t_start: 0, t_end: 60, text: 'a' }] }, { sheet: 2, cells: [{ i: 2, t_start: 60, t_end: 120, text: 'b' }] }] };
   assert.match(compactCells(r, 60), /—— 第 1 张图 ——\n格1 .*\n—— 第 2 张图 ——\n格2 /);
+});
+
+test('自己下载：按短边挑画面轨、同档优先 HEVC、音轨取最小', async () => {
+  const { pickVideo, pickAudio } = await import('../src/media.js');
+  const t = (w, h, codecs, bandwidth) => ({ width: w, height: h, codecs, bandwidth, baseUrl: `u${w}${codecs}` });
+  const tracks = [t(1920, 1080, 'avc1.640032', 2600e3), t(1920, 1080, 'hev1.1.6.L150', 750e3), t(852, 480, 'avc1.64001F', 787e3), t(852, 480, 'av01.0.04M', 184e3), t(852, 480, 'hev1.1.6.L120', 219e3), t(640, 360, 'avc1.64001E', 350e3)];
+  assert.equal(pickVideo(tracks, 480).baseUrl, 'u852hev1.1.6.L120');
+  assert.equal(pickVideo(tracks, 1080).baseUrl, 'u1920hev1.1.6.L150');
+  assert.equal(pickVideo(tracks, 360).baseUrl, 'u640avc1.64001E');
+  assert.equal(pickVideo(tracks, 240).height, 360, '都比要求的清楚：取最小的一档');
+  // 竖屏：1080×1920 的短边是 1080，不能当成 1920P
+  const portrait = [t(1080, 1920, 'hev1', 900e3), t(720, 1280, 'hev1', 500e3), t(480, 852, 'avc1', 300e3)];
+  assert.equal(pickVideo(portrait, 720).width, 720);
+  assert.equal(pickAudio([{ id: 30280, bandwidth: 204e3, baseUrl: 'a' }, { id: 30216, bandwidth: 44e3, baseUrl: 'b' }]).id, 30216);
+  assert.equal(pickAudio(null), null);
+});
+
+test('ffmpeg 路径：设置里填了就用它，ffprobe 取同目录', async () => {
+  const { mediaBins } = await import('../src/media.js');
+  const { DEFAULT_FFMPEG } = await import('dsh-video-storyboard/probe');
+  assert.equal(mediaBins({ ffmpegPath: '' }).ffmpegPath, DEFAULT_FFMPEG);
+  const b = mediaBins({ ffmpegPath: 'Z:/nowhere/ffmpeg.exe' });
+  assert.equal(b.ffmpegPath, 'Z:/nowhere/ffmpeg.exe');
+  assert.ok(b.ffprobePath, '同目录没有 ffprobe 时退回默认');
 });

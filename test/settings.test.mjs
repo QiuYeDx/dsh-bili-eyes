@@ -61,3 +61,9 @@ test('接口：只接受同源，清理拒绝过短路径', async () => {
   assert.equal(dirStats(dir).files, 0);
   assert.deepEqual(await toolVersion('ffmpeg', 'C:/Windows/notepad.exe'), { ok: false, error: '不是 ffmpeg' });
 });
+
+test('设置页脚本能解析（client.js 是直接下发给浏览器的，语法错了整页白屏）', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../src/client.js', import.meta.url), 'utf8');
+  assert.doesNotThrow(() => new Function(src));
+});

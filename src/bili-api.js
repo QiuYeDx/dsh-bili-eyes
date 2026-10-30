@@ -1,6 +1,6 @@
 // B站接口：视频信息、标签、评论、弹幕、字幕、AI 总结、登录状态、推荐与动态、收件箱，
 // 以及少数写操作（点赞、收藏、评论、删评论、私信、纯文字动态）。
-// 写操作只在这里发请求；要不要发、发给谁、发几条由 act.js 决定。不实现投币、关注、拉黑、改资料、上传。
+// 写操作只在这里发请求；要不要发、发给谁、发几条由 act.js 决定。不实现投币、拉黑、改资料、上传。
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 
@@ -245,6 +245,13 @@ export class BiliClient {
     return { list: d?.subtitle?.subtitles ?? [], needLogin: d?.need_login_subtitle === true };
   }
 
+  /** 播放地址（DASH：画面、音轨分开，各档清晰度都列出来）。不登录最高 480P，登录 1080P。 */
+  async playurl(bvid, cid) {
+    const d = await this.signed('https://api.bilibili.com/x/player/wbi/playurl', { bvid, cid, qn: 127, fnval: 4048, fnver: 0, fourk: 1 });
+    if (!d?.dash?.video?.length) throw new BiliError('这个视频没有可下载的画面（可能要付费或会员）');
+    return d.dash;
+  }
+
   /** 下载一条字幕正文：subtitle_url 是带时效的签名地址，拿到就立刻下载。 */
   async subtitleBody(subtitleUrl) {
     const url = subtitleUrl.startsWith('//') ? `https:${subtitleUrl}` : subtitleUrl;
@@ -294,6 +301,12 @@ export class BiliClient {
   async popular(n = 20) {
     const d = await this.request(`https://api.bilibili.com/x/web-interface/popular?ps=${Math.min(50, Math.max(n, 1))}&pn=1`);
     return (d?.list ?? []).map(parseArchive);
+  }
+
+  /** 相关视频（播放页右边那一列）。 */
+  async related(bvid) {
+    const d = await this.request(`https://api.bilibili.com/x/web-interface/archive/related?bvid=${encodeURIComponent(bvid)}`);
+    return (Array.isArray(d) ? d : []).filter((x) => x.bvid).map(parseArchive);
   }
 
   /** 全站排行（rid=0）；新接口要 WBI 签名，旧的不签也能用，先签。 */
@@ -408,6 +421,50 @@ export class BiliClient {
 
   delComment({ oid, type = 1, rpid }) {
     return this.request('https://api.bilibili.com/x/v2/reply/del', { method: 'POST', form: { oid, type, rpid, csrf: this.csrf() } });
+  }
+
+  // ── 关注 ──────────────────────────────────────────────────────────────
+  /** 我和 fid 的关系：attribute 0 未关注、2 已关注、6 互粉、128 拉黑。 */
+  async relation(fid) {
+    const d = await this.request(`https://api.bilibili.com/x/relation?fid=${Number(fid)}`);
+    return { attribute: Number(d?.attribute) || 0, mtime: Number(d?.mtime) || 0, tags: d?.tag ?? [] };
+  }
+
+  /**
+   * 关注（act 1）/ 取关（act 2）。字段和空间页点「关注」时一致；这个接口不带 WBI 签名。
+   * 已经关注过会返回 22014，调用方当成功。
+   */
+  modifyRelation(fid, act) {
+    const statistics = encodeURIComponent(JSON.stringify({ appId: 100, platform: 5 }));
+    return this.request(`https://api.bilibili.com/x/relation/modify?statistics=${statistics}`, {
+      method: 'POST',
+      form: {
+        fid: Number(fid), act, re_src: 11, gaia_source: 'web_main', spmid: '333.1387.0.0',
+        extend_content: JSON.stringify({ entity: 'user', entity_id: Number(fid) }), is_from_frontend_component: true, csrf: this.csrf(),
+      },
+    });
+  }
+
+  /** 关注分组：[{tagid, name, count}]。 */
+  async relationTags() {
+    return (await this.request('https://api.bilibili.com/x/relation/tags')) ?? [];
+  }
+
+  /** 建分组，返回 tagid。 */
+  async createRelationTag(name) {
+    const d = await this.request('https://api.bilibili.com/x/relation/tag/create', { method: 'POST', form: { tag: name, csrf: this.csrf() } });
+    return Number(d?.tagid);
+  }
+
+  /** 把人放进分组（会替换他原来的分组）。 */
+  addToRelationTag(fid, tagid) {
+    return this.request('https://api.bilibili.com/x/relation/tags/addUsers', { method: 'POST', form: { fids: String(fid), tagids: String(tagid), csrf: this.csrf() } });
+  }
+
+  /** 某个分组里的人：[{mid, name}]。 */
+  async relationTagMembers(tagid) {
+    const d = await this.request(`https://api.bilibili.com/x/relation/tag?mid=${Number(this.cookies.DedeUserID)}&tagid=${Number(tagid)}&pn=1&ps=100`);
+    return (d ?? []).map((u) => ({ mid: Number(u.mid), name: u.uname ?? '' }));
   }
 
   /** 发一条文字私信。新接口要求查询串里带 WBI 签名的发送者、接收者、设备号。 */

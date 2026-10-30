@@ -1,23 +1,30 @@
-// 写操作：点赞/收藏、评论/回复、私信主人、发动态。要不要发、发给谁、发几条都在这里决定。
+// 写操作：点赞/收藏、评论/回复、私信主人、发动态、关注/取关。要不要发、发给谁、发几条都在这里决定。
 //
 // 每次写都按这个顺序：档位（off/approve/auto）→ 全部停下 / 风控暂停 → 内容检查 → 额度 → 可信判断。
-//   auto + 可信会话 → 直接发；否则起草（drafts.json，编号 #n），等主人同意后由 bili_confirm 或设置页发出。
+//   auto + 可信会话 → 直接发；可信会话里「先问主人」且用内置门卫 → 弹 DSH 原生审批卡片，主人点允许就发；
+//   其余起草（drafts.json，编号 #n），等主人同意后由 bili_confirm 或设置页发出。
 // 所有写操作（含起草、拒绝、失败）记进 actions.jsonl。硬上限写在代码里，模型改不了。
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR } from './config.js';
+import { DATA_DIR, saveConfig } from './config.js';
 import { clip } from './look.js';
-import { sessionContext, ownerMessages } from './gate.js';
+import { sessionContext, ownerMessages, gateKind } from './gate.js';
 
 export const DRAFTS_FILE = path.join(DATA_DIR, 'drafts.json');
 export const ACTIONS_FILE = path.join(DATA_DIR, 'actions.jsonl');
 
 export class ActError extends Error {}
 
-export const KIND_TEXT = { like: '点赞', fav: '点赞+收藏', comment: '评论', reply: '回复', dm: '私信', post: '动态' };
-const MODE_KEY = { like: 'likeMode', fav: 'likeMode', comment: 'commentMode', reply: 'commentMode', dm: 'dmMode', post: 'postMode' };
-const QUOTA_KEY = { like: 'likePerDay', fav: 'likePerDay', comment: 'commentPerDay', reply: 'replyPerDay', dm: 'dmPerDay', post: 'postPerDay' };
+export const KIND_TEXT = { like: '点赞', fav: '点赞+收藏', comment: '评论', reply: '回复', dm: '私信', post: '动态', follow: '关注', unfollow: '取关' };
+const MODE_KEY = { like: 'likeMode', fav: 'likeMode', comment: 'commentMode', reply: 'commentMode', dm: 'dmMode', post: 'postMode', follow: 'followMode', unfollow: 'followMode' };
+const QUOTA_KEY = { like: 'likePerDay', fav: 'likePerDay', comment: 'commentPerDay', reply: 'replyPerDay', dm: 'dmPerDay', post: 'postPerDay', follow: 'followPerDay', unfollow: 'followPerDay' };
+// 关注：两次之间至少 10 分钟，每天最多 10 个（设置里只能调低）；取关最高只到「先问主人」
+const FOLLOW = new Set(['follow', 'unfollow']);
+const FOLLOW_GAP_S = 600;
+const FOLLOW_HARD_CAP = 10;
+export const FOLLOW_TAG = '小鲸鱼的关注';
+const FOLLOW_STOP = new Set([22002, 22003, 22013, 40061]);   // 只是这一个人关注不了，不暂停
 const MAX_LEN = { comment: 300, reply: 300, dm: 500, post: 500 };
 const LIGHT = new Set(['like', 'fav']);           // 轻操作：间隔只要 5 秒
 const HIDDEN_PAUSE_MS = 2 * 3600_000;           // 评论被设成「仅自己可见」后，写操作暂停 2 小时（接着发只会更糟）
@@ -33,12 +40,20 @@ const ERROR_HINT = {
   12002: '这个视频的评论区关了',
   12015: 'B站要求验证码（风控）',
   12051: '重复评论',
+  22001: '不能关注自己',
+  22002: '对方的隐私设置不让关注',
+  22003: '对方在黑名单里',
+  22009: '关注数到上限了',
+  22013: '对方账号已注销',
+  40061: '用户不存在',
 };
 
 // ── 存储 ──────────────────────────────────────────────────────────────────
 export function loadDrafts(file = DRAFTS_FILE) {
-  try { const s = JSON.parse(fs.readFileSync(file, 'utf8')); return { next: Number(s.next) || 1, list: Array.isArray(s.list) ? s.list : [], pausedUntil: Number(s.pausedUntil) || 0, pauseReason: String(s.pauseReason ?? '') }; }
-  catch { return { next: 1, list: [], pausedUntil: 0, pauseReason: '' }; }
+  try {
+    const s = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return { next: Number(s.next) || 1, list: Array.isArray(s.list) ? s.list : [], pausedUntil: Number(s.pausedUntil) || 0, pauseReason: String(s.pauseReason ?? ''), followPausedUntil: Number(s.followPausedUntil) || 0, followPauseReason: String(s.followPauseReason ?? '') };
+  } catch { return { next: 1, list: [], pausedUntil: 0, pauseReason: '', followPausedUntil: 0, followPauseReason: '' }; }
 }
 export function saveDrafts(d, file = DRAFTS_FILE) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -81,6 +96,7 @@ export function todayCounts(entries, now = Date.now()) {
 
 // ── 内容检查 ──────────────────────────────────────────────────────────────
 const URL_RE = /(https?:\/\/|www\.|b23\.tv|bili2233|\.(com|cn|net|top|xyz|cc)\b)/i;
+const BILI_VIDEO_URL = /https:\/\/www\.bilibili\.com\/video\/BV[0-9A-Za-z]{10}\/?/g;
 
 /**
  * 检查正文；返回清理后的正文。ownerName：@ 只允许 @ 这个名字。
@@ -90,8 +106,10 @@ export function checkText(kind, text, { ownerName = '', mention = false } = {}) 
   let t = String(text ?? '').replace(/\r/g, '').trim();
   if (!t) throw new ActError('正文是空的');
   if (t.length > MAX_LEN[kind]) throw new ActError(`${KIND_TEXT[kind]}最多 ${MAX_LEN[kind]} 个字（现在 ${t.length} 个）`);
-  if (URL_RE.test(t)) throw new ActError('正文里不能带链接或网址');
-  if (/\d{5,}/.test(t)) throw new ActError('正文里不能有 5 位以上的连续数字（防止带出 QQ 号、手机号、UID）');
+  // 私信只发给主人：允许带 B站视频链接（推荐视频要用），别的链接照样不行
+  const body = kind === 'dm' ? t.replace(BILI_VIDEO_URL, '') : t;
+  if (URL_RE.test(body)) throw new ActError(kind === 'dm' ? '私信里只能带 B站视频链接' : '正文里不能带链接或网址');
+  if (/\d{5,}/.test(body)) throw new ActError('正文里不能有 5 位以上的连续数字（防止带出 QQ 号、手机号、UID）');
   const ats = [...t.matchAll(/@([^\s@，。！？,.!?：:]+)/g)].map((m) => m[1]);
   const others = ats.filter((n) => !ownerName || n !== ownerName);
   if (others.length) throw new ActError(`@ 只能 @ 主人${ownerName ? `（${ownerName}）` : '（主人 UID 还没设置）'}，不能 @ ${others.join('、')}`);
@@ -152,6 +170,33 @@ async function verifyCommentState(client, { oid, type, rpid, root }) {
   return state == null ? null : Number(state);
 }
 
+/**
+ * 关注 / 取关，发完核实（评论被悄悄藏起来过，关注也照样查）：隔 1.5、3、6 秒各查一次关系。
+ * 关注成功后放进「小鲸鱼的关注」分组（没有就建）；分组失败不影响关注本身。
+ */
+async function performFollow(client, d) {
+  const mid = Number(d.payload.mid);
+  const follow = d.kind === 'follow';
+  try { await client.modifyRelation(mid, follow ? 1 : 2); }
+  catch (e) { if (!(follow && e?.code === 22014)) throw e; }   // 22014 = 已经关注过
+  let attr = null;
+  for (const wait of [verifyDelayMs * 0.75, verifyDelayMs * 1.5, verifyDelayMs * 3]) {
+    await sleep(wait);
+    try { attr = (await client.relation(mid)).attribute; } catch { attr = null; }
+    if (follow ? attr === 2 || attr === 6 : attr === 0) break;
+  }
+  const confirmed = follow ? attr === 2 || attr === 6 : attr === 0;
+  let tagNote = '';
+  if (follow && confirmed) {
+    try {
+      const tag = (await client.relationTags()).find((t) => t.name === FOLLOW_TAG);
+      const tagid = tag ? Number(tag.tagid) : await client.createRelationTag(FOLLOW_TAG);
+      await client.addToRelationTag(mid, tagid);
+    } catch (e) { tagNote = `（没放进「${FOLLOW_TAG}」分组：${e?.message ?? e}）`; }
+  }
+  return { unconfirmed: !confirmed, state: attr, info: confirmed ? `已${KIND_TEXT[d.kind]}（已核实）${tagNote}` : `${KIND_TEXT[d.kind]}请求成功了，但查不到关系变化` };
+}
+
 /** 真正发请求。返回 {rpid?, info, state?, hidden?}。 */
 async function perform(client, d) {
   const p = d.payload;
@@ -170,6 +215,7 @@ async function perform(client, d) {
     return { rpid, state, hidden: state != null && state !== 0, info: state === 0 ? '已发出（已确认公开）' : '已发出' };
   }
   if (d.kind === 'dm') { await client.sendDm({ receiverMid: p.to, text: p.text }); return { info: '已发出' }; }
+  if (FOLLOW.has(d.kind)) return performFollow(client, d);
   if (d.kind === 'post') { const r = await client.postDynamic(p.text); return { rpid: String(r?.dyn_id_str ?? ''), info: '已发出' }; }
   throw new ActError(`不认识的操作 ${d.kind}`);
 }
@@ -180,17 +226,20 @@ async function perform(client, d) {
  * @param {object} o {cfg, client, sessionId, via:'tool'|'ui', draftsFile, auditFile, now}
  * @returns {Promise<{status:'sent'|'draft'|'refused'|'failed', text:string, draft?:object}>}
  */
-export async function request(req, { cfg, client, sessionId = '', via = 'tool', draftsFile = DRAFTS_FILE, auditFile = ACTIONS_FILE, now = Date.now(), gateOpts } = {}) {
+export async function request(req, { cfg, client, sessionId = '', session = null, approve = null, via = 'tool', draftsFile = DRAFTS_FILE, auditFile = ACTIONS_FILE, now = Date.now(), gateOpts } = {}) {
   const { kind } = req;
-  const mode = cfg[MODE_KEY[kind]];
+  let mode = cfg[MODE_KEY[kind]];
+  if (kind === 'unfollow' && mode === 'auto') mode = 'approve';   // 取关永远先问主人
   const refuse = (why) => { audit({ kind, status: 'refused', target: req.target, text: req.payload?.text, error: why }, auditFile); return { status: 'refused', text: `没发：${why}` }; };
   if (mode === 'off') return refuse(`主人没开「${KIND_TEXT[kind]}」（设置页 → 互动）`);
   if (cfg.writePaused) return refuse('主人在设置页按了「全部停下」');
   const drafts = loadDrafts(draftsFile);
   if (drafts.pausedUntil > now) return refuse(`${drafts.pauseReason || '刚才被 B站风控拦过'}，写操作暂停到 ${new Date(drafts.pausedUntil).toLocaleTimeString()}`);
+  if (FOLLOW.has(kind) && drafts.followPausedUntil > now) return refuse(`${drafts.followPauseReason || '关注被 B站拦过'}，关注暂停到 ${new Date(drafts.followPausedUntil).toLocaleString()}`);
 
   const entries = readAudit(2000, auditFile);
-  const quota = cfg[QUOTA_KEY[kind]];
+  if (kind === 'unfollow' && !req.own) return refuse('只能取关她自己关注的人（号上原来就有的关注不能动）');
+  const quota = FOLLOW.has(kind) ? Math.min(FOLLOW_HARD_CAP, cfg[QUOTA_KEY[kind]]) : cfg[QUOTA_KEY[kind]];
   const used = (todayCounts(entries, now)[kind] ?? 0) + (kind === 'fav' ? todayCounts(entries, now).like ?? 0 : kind === 'like' ? todayCounts(entries, now).fav ?? 0 : 0);
   if (used >= quota) return refuse(`今天的「${KIND_TEXT[kind]}」额度用完了（${used}/${quota}）`);
   if (kind === 'comment' && entries.some((e) => e.kind === 'comment' && SENT.has(e.status) && e.target?.oid === String(req.payload.oid))) return refuse('这个视频下面我已经评论过了（同一个视频只发一条顶层评论）');
@@ -198,9 +247,22 @@ export async function request(req, { cfg, client, sessionId = '', via = 'tool', 
   const pendingSame = drafts.list.find((x) => x.status === 'pending' && x.kind === kind && JSON.stringify(x.payload) === JSON.stringify(req.payload));
   if (pendingSame) return { status: 'draft', draft: pendingSame, text: `这条已经起草过了（#${pendingSame.id}），还在等主人同意。` };
 
-  const ctx = await sessionContext(cfg, sessionId, gateOpts);
-  if (mode === 'auto' && (ctx.trusted || via === 'ui')) {
+  // 后台「自己逛」没有会话：开没开、开到哪一档是主人在设置里定的，按可信算
+  const ctx = via === 'background' ? { trusted: true, label: '自己逛（后台）', gate: 'background' } : await sessionContext(cfg, session ? { sessionId, session } : sessionId, gateOpts);
+  // 关注「直接发」只对她最近真看过的 UP 主：就算会话可信，这一轮也可能是逛的时候被评论带偏的
+  const autoOk = mode === 'auto' && (kind !== 'follow' || req.watched || via === 'ui');
+  if (autoOk && (ctx.trusted || via === 'ui')) {
     return send({ kind, payload: req.payload, preview: req.preview, target: req.target }, { cfg, client, entries, now, auditFile, draftsFile, how: via === 'ui' ? 'ui' : 'auto' });
+  }
+  // 内置门卫 + 可信会话：直接在 DSH 里弹审批卡片（同一轮里等主人点）
+  if (ctx.gate === 'builtin' && ctx.trusted && approve) {
+    const outcome = await approve(`B站${KIND_TEXT[kind]}：${clip(req.preview, 120)}`);
+    if (outcome === 'allowed-once') return send({ kind, payload: req.payload, preview: req.preview, target: req.target }, { cfg, client, entries, now, auditFile, draftsFile, how: 'card' });
+    if (outcome === 'rejected') {
+      audit({ kind, status: 'rejected', target: req.target, text: req.payload?.text, how: 'card' }, auditFile);
+      return { status: 'refused', text: `主人在审批卡片上点了拒绝，没发（${KIND_TEXT[kind]}）。别换个说法再试。` };
+    }
+    // 'cancelled' / 'unavailable'（没有窗口能弹卡片）：照常起草
   }
   // 起草
   const draft = { id: drafts.next, kind, payload: req.payload, preview: req.preview, target: req.target, createdAt: now, sessionId: String(sessionId), where: ctx.label, status: 'pending' };
@@ -208,22 +270,31 @@ export async function request(req, { cfg, client, sessionId = '', via = 'tool', 
   drafts.list.push(draft);
   saveDrafts(drafts, draftsFile);
   audit({ kind, status: 'draft', draft: draft.id, target: req.target, text: req.payload?.text, where: ctx.label }, auditFile);
-  const how = cfg.gateUrl
+  const how = ctx.gate !== 'builtin'
     ? '先问主人要不要发（把要发的内容告诉主人），主人明确同意后调用 bili_confirm({draft: 编号})；主人说不发就调用 bili_confirm({draft: 编号, decision: "drop"})。'
     : '要主人在 DSH 设置页「B站看视频 → 互动 → 待同意」里点同意才会发出。';
-  return { status: 'draft', draft, text: `已起草 #${draft.id}（${KIND_TEXT[kind]}：${clip(req.preview, 80)}），还没发出去。${how}` };
+  const why = mode === 'auto' && kind === 'follow' && !req.watched ? '（最近 14 天没看过这个 UP 主的视频，所以要先问主人）' : '';
+  return { status: 'draft', draft, text: `已起草 #${draft.id}（${KIND_TEXT[kind]}：${clip(req.preview, 80)}）${why}，还没发出去。${how}` };
 }
 
 /** 发出（不再检查档位和可信，只检查间隔和风控）。 */
 async function send(d, { cfg, client, entries = readAudit(2000), now = Date.now(), auditFile = ACTIONS_FILE, draftsFile = DRAFTS_FILE, how = 'auto', draftId = null }) {
-  const gap = LIGHT.has(d.kind) ? 5 : cfg.writeGapSeconds;
+  const gap = LIGHT.has(d.kind) || (FOLLOW.has(d.kind) && how === 'ui') ? 5 : cfg.writeGapSeconds;
   const last = entries.find((e) => e.status === 'ok' && (LIGHT.has(d.kind) || !LIGHT.has(e.kind)));
-  if (last && now - last.at < gap * 1000) {
-    const wait = Math.ceil((gap * 1000 - (now - last.at)) / 1000);
-    return { status: 'refused', text: `没发：离上一次写操作太近，${wait} 秒后再试${draftId ? `（草稿 #${draftId} 还留着）` : ''}` };
+  // 关注之间另有 10 分钟间隔；主人在设置页手动取关不受它限制
+  const lastFollow = FOLLOW.has(d.kind) && how !== 'ui' ? entries.find((e) => FOLLOW.has(e.kind) && SENT.has(e.status)) : null;
+  const waitFor = (e, g) => (e && now - e.at < g * 1000 ? Math.ceil((g * 1000 - (now - e.at)) / 1000) : 0);
+  const wait = Math.max(waitFor(last, gap), waitFor(lastFollow, FOLLOW_GAP_S));
+  if (wait > 0) {
+    return { status: 'refused', text: `没发：离上一次${waitFor(lastFollow, FOLLOW_GAP_S) ? '关注' : '写操作'}太近，${wait} 秒后再试${draftId ? `（草稿 #${draftId} 还留着）` : ''}` };
   }
   try {
     const r = await perform(client, d);
+    if (r.unconfirmed) {
+      audit({ kind: d.kind, status: 'unconfirmed', how, draft: draftId, target: d.target, state: r.state }, auditFile);
+      pauseFollow(draftsFile, now + 24 * 3600_000, `上一次${KIND_TEXT[d.kind]}没核实到`);
+      return { status: 'failed', text: `${r.info}（关系状态 ${r.state ?? '查不到'}）。照实告诉主人，别说「${KIND_TEXT[d.kind]}好了」；关注先暂停 24 小时。` };
+    }
     if (r.hidden) {
       audit({ kind: d.kind, status: 'hidden', how, draft: draftId, target: d.target, text: d.payload?.text, rpid: r.rpid ?? '', state: r.state }, auditFile);
       const drafts = loadDrafts(draftsFile);
@@ -245,8 +316,37 @@ async function send(d, { cfg, client, entries = readAudit(2000), now = Date.now(
     }
     const why = explain(e);
     audit({ kind: d.kind, status: 'fail', how, draft: draftId, target: d.target, text: d.payload?.text, error: why }, auditFile);
-    return { status: 'failed', text: `B站没让发：${why}。别反复重试${RISK_CODES.has(e?.code) ? '，写操作先暂停 30 分钟' : ''}。` };
+    let extra = RISK_CODES.has(e?.code) ? '，写操作先暂停 30 分钟' : '';
+    if (FOLLOW.has(d.kind)) {
+      if (e?.code === 22009) {
+        try { saveConfig({ followMode: 'off' }); } catch { /* 改不了配置也要告诉主人 */ }
+        extra = '。关注数到上限了，已经把「关注」关掉，告诉主人';
+      } else if (!FOLLOW_STOP.has(e?.code)) {
+        pauseFollow(draftsFile, now + 6 * 3600_000, `${KIND_TEXT[d.kind]}被 B站拦过（${why}）`);
+        extra += '，关注先暂停 6 小时';
+      }
+    }
+    return { status: 'failed', text: `B站没让发：${why}。别反复重试${extra}。` };
   }
+}
+
+function pauseFollow(draftsFile, until, reason) {
+  const drafts = loadDrafts(draftsFile);
+  drafts.followPausedUntil = until;
+  drafts.followPauseReason = reason;
+  saveDrafts(drafts, draftsFile);
+}
+
+/** 她关注的人：审计里关注成功、之后没取关的。[{mid, name, at, why}]，新的在前。 */
+export function ownFollows(entries) {
+  const out = new Map();
+  for (const e of [...entries].reverse()) {   // 旧 → 新
+    const mid = Number(e.target?.mid);
+    if (!mid || !SENT.has(e.status)) continue;
+    if (e.kind === 'follow') out.set(mid, { mid, name: e.target.name ?? '', at: e.at, why: e.target.why ?? '' });
+    if (e.kind === 'unfollow') out.delete(mid);
+  }
+  return [...out.values()].reverse();
 }
 
 /**
@@ -270,7 +370,7 @@ export async function confirm(draftId, decision, { cfg, client, sessionId = '', 
   if (drafts.pausedUntil > now) return { status: 'refused', text: `没发：写操作暂停到 ${new Date(drafts.pausedUntil).toLocaleTimeString()}（${drafts.pauseReason || '刚被风控拦过'}）` };
   let how = 'ui';
   if (via !== 'ui') {
-    if (!cfg.gateUrl) return { status: 'refused', text: `没法确认主人同意了：没配门卫。草稿 #${d.id} 要主人在设置页里点同意。` };
+    if (gateKind(cfg, gateOpts) === 'builtin') return { status: 'refused', text: `没法确认主人同意了：没接门卫。草稿 #${d.id} 要主人在设置页里点同意。` };
     const msgs = await ownerMessages(cfg, sessionId || d.sessionId, d.createdAt, gateOpts);
     if (!msgs) return { status: 'refused', text: '门卫没响应，没法确认主人同意了，草稿先留着。' };
     // 不带编号的表态只对最新那条待同意的草稿有效
@@ -289,6 +389,24 @@ export async function confirm(draftId, decision, { cfg, client, sessionId = '', 
   if (r.status === 'sent' || r.status === 'hidden') finish('sent', r.rpid ?? '');
   else if (r.status === 'failed') finish('failed', r.text);
   return r;
+}
+
+/** 设置页：主人直接取关她关注的某个人（不看档位，只看是不是她关注的）。 */
+export async function ownerUnfollow(mid, { cfg, client, auditFile = ACTIONS_FILE, draftsFile = DRAFTS_FILE, now = Date.now() } = {}) {
+  const f = ownFollows(readAudit(2000, auditFile)).find((x) => x.mid === Number(mid));
+  if (!f) throw new ActError('这个人不是她关注的');
+  return send({ kind: 'unfollow', payload: { mid: f.mid }, preview: `取关「${f.name}」`, target: { mid: String(f.mid), name: f.name, why: '主人在设置页取关' } }, { cfg, client, now, auditFile, draftsFile, how: 'ui' });
+}
+
+/** 设置页「再核实一次」：她关注的人现在还在关注吗。返回 {checked, missing:[名字]}。 */
+export async function recheckFollows({ client, auditFile = ACTIONS_FILE } = {}) {
+  const list = ownFollows(readAudit(2000, auditFile));
+  const missing = [];
+  for (const f of list) {
+    const attr = (await client.relation(f.mid).catch(() => ({ attribute: -1 }))).attribute;
+    if (attr === 0) missing.push(f.name || String(f.mid));
+  }
+  return { checked: list.length, missing };
 }
 
 /** 设置页：删掉一条自己发的评论（审计里那条 ok 的记录）。 */

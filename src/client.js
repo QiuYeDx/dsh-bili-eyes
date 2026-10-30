@@ -294,6 +294,17 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
       const [login, setLogin] = useState(null);
       useEffect(() => { if (st.data) setLogin(st.data.login); }, [st.data]);
       const clear = (which, label) => api.post('clearCache', { which }).then((r) => { toast(`${label}：清掉 ${r.cleared.files} 个文件（${fmtBytes(r.cleared.bytes)}）`); st.reload(); }, (e) => toast(e.message, true));
+      // 一键下载 ffmpeg：点了之后每秒问一次进度，下完刷新检查
+      const [dl, setDl] = useState(null);
+      useEffect(() => {
+        if (!dl?.running) return undefined;
+        const t = setInterval(() => api.post('ffmpegState').then((r) => {
+          setDl(r.install);
+          if (!r.install.running) { toast(r.install.error ? `下载失败：${r.install.error}` : `ffmpeg 装好了（${r.install.done?.ffmpeg}）`, Boolean(r.install.error)); st.reload(); }
+        }, () => {}), 1000);
+        return () => clearInterval(t);
+      }, [dl?.running]);
+      const install = () => api.post('ffmpegInstall').then((r) => setDl(r.install), (e) => toast(e.message, true));
       return h(Loading, { state: st }, (d) => {
         const u = d.usage; const c = d.cache;
         const cacheRow = (key, label, s, extra) => h(React.Fragment, { key },
@@ -315,10 +326,16 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
                 cacheRow('storyboard', '分镜缓存', c.storyboard),
                 cacheRow('media', '下载的视频', c.media, `，上限 ${fmtBytes(c.mediaMaxMb * 1048576)}`)),
               h('div', null, h(Btn, { onClick: () => api.post('openFolder', { which: 'data' }).then(() => toast('已在文件管理器里打开'), (e) => toast(e.message, true)) }, '打开数据文件夹')))),
-          h(Card, { title: '状态检查', aside: `v${d.version}` },
-            h('ul', { className: 'be-checks' }, d.checks.map((x) => h('li', { key: x.id, className: 'be-check' },
-              h('span', { className: `be-dot ${x.ok ? 'ok' : x.optional ? 'opt' : 'bad'}` }, x.ok ? '✓' : x.optional ? '–' : '!'),
-              h('div', null, h('div', null, x.label), x.hint && h('div', { className: 'be-faint' }, x.hint))))),
+          h(Card, { title: '安装检查', aside: `v${d.version}`, desc: '带 ! 的缺了会影响基本功能；带 – 的是可选项，缺了只是少一些功能。' },
+            h('ul', { className: 'be-checks' }, d.checks.map((x) => {
+              const ins = x.id === 'ffmpeg' ? (dl ?? x.install) : null;
+              return h('li', { key: x.id, className: 'be-check' },
+                h('span', { className: `be-dot ${x.ok ? 'ok' : x.optional ? 'opt' : 'bad'}` }, x.ok ? '✓' : x.optional ? '–' : '!'),
+                h('div', null, h('div', null, x.label), x.hint && h('div', { className: 'be-faint' }, x.hint),
+                  ins && (ins.running
+                    ? h('div', { className: 'be-row' }, h('span', { className: 'be-spin' }), h('span', { className: 'be-faint' }, ins.phase || '下载中'))
+                    : !x.ok && h('div', { className: 'be-row' }, h(Btn, { kind: 'primary', onClick: install }, '下载 ffmpeg'), ins.error && h('span', { className: 'be-err' }, ins.error)))));
+            })),
             h('div', null, h(Btn, { onClick: () => { st.reload(); toast('已刷新'); } }, '刷新'))),
           h(Card, { title: '最近看过', aside: d.history.length ? `最近 ${d.history.length} 条` : '' },
             d.history.length
@@ -441,6 +458,12 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
       }
       if (fld.type === 'dir' || fld.type === 'exe') return h(PathField, { field: fld, value, onChange });
       if (fld.key === 'ownerMid') return h(OwnerField, { fld, value, onChange, hint: fld.hint });
+      if (fld.type === 'multi') {
+        const set = new Set(String(value ?? '').split(',').filter(Boolean));
+        const flip = (k) => { const n = new Set(set); if (n.has(k)) n.delete(k); else n.add(k); onChange(fld.options.map(([o]) => o).filter((o) => n.has(o)).join(',')); };
+        return h(Field, { label: fld.label, hint: fld.hint, wide: true },
+          h('div', { className: 'be-row' }, fld.options.map(([k, l]) => h('label', { key: k, className: 'be-switch' }, h('input', { type: 'checkbox', checked: set.has(k), onChange: () => flip(k) }), l))));
+      }
       if (fld.type === 'enum') {
         return h(Field, { label: fld.label, hint },
           h('select', { className: 'be-select', value, onChange: (e) => onChange(e.target.value) }, fld.options.map(([v, l]) => h('option', { key: v, value: v }, l))));
@@ -509,6 +532,7 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
       const [dir, setDir] = useState('');
       const [run, setRun] = useState(null);
       const [res, setRes] = useState(null);
+      const trails = useView('trails');
       const load = (source = src) => {
         if (source === 'up' && !up.trim()) { setList(null); return; }
         setList({ loading: true });
@@ -517,7 +541,7 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
       useEffect(() => { load('recommend'); }, []);
       const go = () => {
         setRes(null); setRun({ since: Date.now() });
-        api.post('surf', { direction: dir }).then(setRes, (e) => setRes({ error: e.message })).finally(() => setRun(null));
+        api.post('surf', { direction: dir }).then(setRes, (e) => setRes({ error: e.message })).finally(() => { setRun(null); trails.reload(); });
       };
       return h(React.Fragment, null,
         h(Card, { title: '刷列表', desc: '她用 bili_feed 看到的就是这些。登录后「首页推荐」按这个账号的口味推，逛得越多越准。' },
@@ -528,7 +552,7 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
           list?.loading && h('div', { className: 'be-empty' }, h('span', { className: 'be-spin', style: { marginRight: 8 } }), '加载中…'),
           list?.error && h('div', { className: 'be-no' }, list.error),
           list?.items && (list.items.length ? h(VideoItems, { items: list.items }) : h('div', { className: 'be-empty' }, '是空的'))),
-        h(Card, { title: '逛一圈', desc: '和她调用 bili_surf 一样：找候选 → 挑几条 → 快速看 → 交一份摘要。在 DSH 里会用模型挑选和总结；本地预览没有模型，按播放量挑。' },
+        h(Card, { title: '逛一圈', desc: '和她调用 bili_surf 一样。「顺着逛」时模型自己搜、打开视频、看评论和 UP 主的其他投稿，最后挑几条；「固定流程」是找候选 → 挑几条 → 快速看 → 总结。本地预览没有模型，只能按播放量挑。' },
           h('div', { className: 'be-row' },
             h('input', { className: 'be-input be-grow', value: dir, maxLength: 50, placeholder: '方向（可选），比如：游戏剧情、冷门科普', onChange: (e) => setDir(e.target.value), onKeyDown: (e) => { if (e.key === 'Enter' && !run) go(); } }),
             h(Btn, { kind: 'primary', disabled: Boolean(run), onClick: go }, run ? '逛着呢…' : '逛一圈'),
@@ -536,9 +560,46 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
           res && (res.error
             ? h('div', { className: 'be-no' }, res.error)
             : h(React.Fragment, null,
-              h('div', { className: 'be-faint' }, `${fmtMs(res.ms)} · ${res.model ? '用了模型挑选和总结' : '没用模型（按播放量挑，材料直接截取）'}`),
+              h('div', { className: 'be-faint' }, `${fmtMs(res.ms)} · ${res.mode === 'explore' ? `顺着逛了 ${res.steps} 步` : res.model ? '固定流程，用了模型挑选和总结' : '没用模型（按播放量挑，材料直接截取）'}`),
               h('pre', { className: 'be-pre' }, res.text)))),
-        h(ConfigGroups, { groups: [['surf', '冲浪设置', '逛的时候怎么挑：口味、用哪个模型、一圈几条。']], toast }));
+        h(Card, { title: '最近的路线', desc: '「顺着逛」每一圈是怎么点过去的（最近 20 圈），✓ 是最后挑中的。' },
+          h(Loading, { state: trails }, (d) => (d.trails.length
+            ? h('div', { className: 'be-hist' }, d.trails.map((t) => h('div', { key: t.at, className: 'be-hrow' },
+              h('div', { className: 'when' }, when(t.at)),
+              h('div', { style: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 } },
+                h('div', { className: 'be-htitle' }, h('span', { className: 'be-badge' }, t.direction || '随便逛'), h('span', { className: 'be-faint' }, `${t.steps.length} 步 · 约 ${Math.round((t.tokens?.in ?? 0) / 1000)}k 输入 token · ${t.model}`)),
+                h('div', { className: 'be-faint' }, t.steps.join(' → ') || '（没走动）'),
+                t.picks.map((p) => h('div', { key: p.bvid }, '✓ ', h('a', { href: `https://www.bilibili.com/video/${p.bvid}`, target: '_blank', rel: 'noreferrer' }, `${p.ref} ${p.title}`))),
+                t.route && h('div', { className: 'be-faint' }, t.route)))))
+            : h('div', { className: 'be-empty' }, '还没有顺着逛过。')))),
+        h(AutoSurf, { toast }),
+        h(ConfigGroups, { groups: [['surf', '冲浪设置', '逛的时候怎么挑：口味、用哪个模型、一圈几条、怎么逛。']], toast }));
+    }
+
+    const RUN_STATUS = { sent: '已发', draft: '起草（等同意）', refused: '没发', failed: '失败', hidden: '仅自己可见', ok: '已转达', 'no-owner': '没设主人 UID', 'no-gate': '没接门卫' };
+    function AutoSurf({ toast }) {
+      const st = useView('autosurf');
+      const [run, setRun] = useState(null);
+      const go = () => {
+        setRun({ since: Date.now() });
+        api.post('autoSurfNow').then((r) => toast(r.run.ok ? `逛完了：挑了 ${r.run.picks.length} 条` : `没成功：${r.run.error}`, !r.run.ok), (e) => toast(e.message, true)).finally(() => { setRun(null); st.reload(); });
+      };
+      return h(React.Fragment, null,
+        h(Card, { title: '自己逛', desc: '插件按时间表自己去逛，逛完看情况在视频下面评论，把最想推荐的告诉主人（方式在下面选）。评论、@、私信照样受「互动」里的档位和额度管。' },
+          h(Loading, { state: st }, (d) => h(React.Fragment, null,
+            d.on
+              ? h('div', null, '今天的计划：', d.slots.length ? d.slots.map((t) => h('span', { key: t, className: `be-badge ${d.done.includes(t) ? 'ok' : ''}`, style: { marginRight: 6 } }, `${new Date(t).toTimeString().slice(0, 5)}${d.done.includes(t) ? ' ✓' : ''}`)) : h('span', { className: 'be-faint' }, '今天的时间段已经过了，明天再逛'))
+              : h('div', { className: 'be-faint' }, '没开。在下面「自己逛」设置里打开。'),
+            h('div', { className: 'be-row' }, h(Btn, { disabled: Boolean(run), onClick: go }, run ? '逛着呢…' : '现在逛一次'), run && h(Elapsed, { since: run.since }), h('span', { className: 'be-faint' }, '不占今天的次数；会真的评论 / 推荐')),
+            d.runs.length > 0 && h('div', { className: 'be-hist' }, d.runs.map((r) => h('div', { key: r.at, className: 'be-hrow' },
+              h('div', { className: 'when' }, when(r.at)),
+              h('div', { style: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 } },
+                h('div', { className: 'be-htitle' }, h('span', { className: `be-badge ${r.ok ? 'ok' : 'bad'}` }, r.ok ? (r.reason === 'manual' ? '手动' : '到点') : '失败'), r.ok && h('span', { className: 'be-faint' }, `挑了 ${r.picks.length} 条${r.steps ? `，${r.steps} 步` : ''}`)),
+                r.error && h('div', { className: 'be-err' }, r.error),
+                r.comments.map((c) => h('div', { key: c.bvid }, `评论《${c.title}》：${c.text}`, h('span', { className: 'be-faint' }, ` —— ${RUN_STATUS[c.status] ?? c.status}`))),
+                r.recommend && h('div', null, `推荐《${r.recommend.title}》：${r.recommend.why}`, h('span', { className: 'be-faint' }, ` —— ${Object.entries(r.recommend.ways).map(([k, v]) => `${{ notify: '门卫', comment: '评论 @', dm: '私信' }[k]} ${RUN_STATUS[v] ?? v}`).join('，')}`)),
+                r.ok && !r.comments.length && !r.recommend && r.picks.length > 0 && h('div', { className: 'be-faint' }, `没评论也没推荐（逛到：${r.picks.map((p) => p.title).join('、')}）`)))))))),
+        h(ConfigGroups, { groups: [['autosurf', '自己逛设置', '什么时候逛、每天几次、要不要评论、怎么推荐给主人。']], toast, onSaved: () => st.reload() }));
     }
 
     // ── 收件箱 ───────────────────────────────────────────────────────────────
@@ -585,7 +646,7 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
               }))
               : h('div', { className: 'be-empty' }, d.started ? '还没有新消息。' : '还没查过：点「现在查一次」先记下现在的位置。')))),
         h(ConfigGroups, {
-          groups: [['inbox', '收件箱设置', '多久查一次、什么时候不查、每小时最多打扰几次。'], ['gate', '门卫', '可选。一个本机接口：告诉插件「这个会话是不是主人本人」「主人说过什么」，并把收件箱的新消息转达出去。没有门卫时草稿只能在「互动」页同意。']],
+          groups: [['inbox', '收件箱设置', '多久查一次、什么时候不查、每小时最多打扰几次。'], ['gate', '门卫', '告诉插件「这个会话是不是主人本人」「主人说过什么」，并把收件箱的新消息转达出去。不填地址时用内置门卫：按会话的 agentPreset 和工作目录判断是不是桥接会话，本机会话「先问主人」时弹 DSH 审批卡片。协议见 docs/门卫协议.md。']],
           toast,
           actions: { gate: (saved) => saved.gateUrl && h(Btn, { onClick: () => api.post('gateTest').then((r) => toast(`门卫正常（${fmtMs(r.ms)}）：${r.label}`), (e) => toast(e.message, true)) }, '测试门卫') },
         }));
@@ -593,7 +654,7 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
 
     // ── 互动 ─────────────────────────────────────────────────────────────────
     const MODE_TEXT = { off: ['关', ''], approve: ['先问主人', 'brand'], auto: ['直接发', 'pink'] };
-    const LOG_STATUS = { ok: ['已发', 'ok'], hidden: ['仅自己可见', 'bad'], fail: ['失败', 'bad'], refused: ['拒绝', ''], draft: ['起草', 'brand'], rejected: ['丢掉', ''] };
+    const LOG_STATUS = { ok: ['已发', 'ok'], hidden: ['仅自己可见', 'bad'], fail: ['失败', 'bad'], refused: ['拒绝', ''], draft: ['起草', 'brand'], rejected: ['丢掉', ''], unconfirmed: ['没核实到', 'bad'] };
 
     function Interact({ toast, active }) {
       const st = useView('act');
@@ -602,10 +663,14 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
       const draftDo = (id, decision) => api.post('draft', { id, decision }).then((r) => { toast(r.text, r.status === 'failed' || r.status === 'refused' && decision === 'send'); st.reload(); }, (e) => toast(e.message, true));
       const del = (id) => api.post('deleteSent', { id }).then(() => { toast('已在 B站删掉'); st.reload(); }, (e) => toast(e.message, true));
       const recheck = () => api.post('recheck').then((r) => { toast(r.checked ? `查了 ${r.checked} 条，${r.nowVisible} 条已经公开` : '没有要复查的'); st.reload(); }, (e) => toast(e.message, true));
+      const unfollow = (mid) => api.post('unfollow', { mid }).then((r) => { toast(r.text, r.status !== 'sent'); st.reload(); }, (e) => toast(e.message, true));
+      const undoToday = () => api.post('undoTodayFollows').then((r) => { toast(r.total ? `今天关注了 ${r.total} 个，取关了 ${r.done} 个` : '今天没关注过谁', r.done < r.total); st.reload(); }, (e) => toast(e.message, true));
+      const recheckF = () => api.post('recheckFollows').then((r) => toast(r.missing.length ? `查了 ${r.checked} 个，这些已经不在关注里：${r.missing.join('、')}` : `查了 ${r.checked} 个，都还在关注`, r.missing.length > 0), (e) => toast(e.message, true));
       return h(React.Fragment, null,
         h(Loading, { state: st }, (d) => {
           const lvl = d.login.level;
-          const kinds = [['like', '点赞/收藏', d.counts.like + (d.counts.fav ?? 0) || 0, d.quota.like], ['comment', '评论', d.counts.comment ?? 0, d.quota.comment], ['reply', '回复', d.counts.reply ?? 0, d.quota.reply], ['dm', '私信', d.counts.dm ?? 0, d.quota.dm], ['post', '动态', d.counts.post ?? 0, d.quota.post]];
+          const kinds = [['like', '点赞/收藏', d.counts.like + (d.counts.fav ?? 0) || 0, d.quota.like], ['comment', '评论', d.counts.comment ?? 0, d.quota.comment], ['reply', '回复', d.counts.reply ?? 0, d.quota.reply], ['dm', '私信', d.counts.dm ?? 0, d.quota.dm], ['post', '动态', d.counts.post ?? 0, d.quota.post], ['follow', '关注', d.counts.follow ?? 0, d.quota.follow]];
+          const followedToday = d.follows.filter((f) => new Date(f.at).toDateString() === new Date().toDateString()).length;
           return h(React.Fragment, null,
             h('div', { className: 'be-grid' },
               h(Card, { title: '账号' },
@@ -615,9 +680,10 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
                     lvl === 0 && h('div', { className: 'be-err' }, 'LV0（未转正）：B站不让发评论和弹幕。去 B站 App 答题转正后再打开「评论、回复」。'))
                   : h('div', { className: 'be-no' }, '没登录：去「概览」扫码登录（建议用小号）'),
                 h('div', { className: 'be-faint' }, d.owner.mid ? `主人：${d.owner.name || '（昵称没查到）'}（UID ${d.owner.mid}）` : '还没设置主人 UID：不能 @ 主人、不能私信'),
-                h('div', { className: 'be-row' }, Object.entries(d.modes).map(([k, m]) => h('span', { key: k, className: `be-badge ${MODE_TEXT[m][1]}` }, `${{ like: '点赞', comment: '评论', dm: '私信', post: '动态' }[k]}：${MODE_TEXT[m][0]}`)))),
+                h('div', { className: 'be-row' }, Object.entries(d.modes).map(([k, m]) => h('span', { key: k, className: `be-badge ${MODE_TEXT[m][1]}` }, `${{ like: '点赞', comment: '评论', dm: '私信', post: '动态', follow: '关注' }[k]}：${MODE_TEXT[m][0]}`)))),
               h(Card, { title: '今天' },
                 (d.paused || d.pausedUntil > 0) && h('div', { className: 'be-err' }, d.paused ? '已按「全部停下」：所有写操作都会被拒绝' : `${d.pauseReason || '刚被 B站风控拦过'}：写操作暂停到 ${new Date(d.pausedUntil).toLocaleTimeString()}`),
+                d.followPausedUntil > 0 && h('div', { className: 'be-err' }, `${d.followPauseReason || '关注被 B站拦过'}：关注暂停到 ${new Date(d.followPausedUntil).toLocaleString()}`),
                 kinds.map(([k, label, used, max]) => h(Meter, { key: k, label, used, max })))),
             h(Card, { title: '待同意', aside: d.drafts.length ? `${d.drafts.length} 条` : '', desc: d.gate ? '她起草后会先在聊天里问主人；主人说「发」她会自己发出。你也可以直接在这里处理。' : '没配门卫：她没法确认主人同意，草稿只能在这里处理。' },
               d.drafts.length
@@ -627,6 +693,18 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
                   x.target?.title && h('div', { className: 'be-faint' }, x.target.url ? h('a', { href: x.target.url, target: '_blank', rel: 'noreferrer', style: { color: 'inherit' } }, `《${x.target.title}》`) : `《${x.target.title}》`),
                   x.expired ? h('div', { className: 'be-faint' }, '已过期') : h('div', { className: 'be-row' }, h(Btn, { kind: 'primary', onClick: () => draftDo(x.id, 'send') }, '同意并发出'), h(Btn, { onClick: () => draftDo(x.id, 'drop') }, '丢掉')))))
                 : h('div', { className: 'be-empty' }, '没有待同意的草稿。')),
+            h(Card, { title: '她的关注', aside: d.follows.length ? `${d.follows.length} 个` : '', desc: '她自己关注的 UP 主（都在 B站的「小鲸鱼的关注」分组里）。号上原来就有的关注不在这里，她也动不了。' },
+              d.follows.length > 0 && h('div', { className: 'be-row' },
+                followedToday > 0 && h(ConfirmBtn, { label: `撤销今天的 ${followedToday} 个关注`, confirmLabel: '确认全部取关？', onConfirm: undoToday }),
+                h(Btn, { onClick: recheckF }, '再核实一次')),
+              d.follows.length
+                ? h('div', { className: 'be-hist' }, d.follows.map((f) => h('div', { key: f.mid, className: 'be-hrow' },
+                  h('div', { className: 'when' }, when(f.at)),
+                  h('div', { style: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 } },
+                    h('div', { className: 'be-htitle' }, h('a', { href: `https://space.bilibili.com/${f.mid}`, target: '_blank', rel: 'noreferrer' }, f.name || f.mid)),
+                    f.why && h('div', { className: 'be-faint' }, f.why),
+                    h('div', null, h(ConfirmBtn, { label: '取关', confirmLabel: '确认取关？', onConfirm: () => unfollow(f.mid) }))))))
+                : h('div', { className: 'be-empty' }, '她还没关注过谁。')),
             h(Card, { title: '记录', aside: d.log.length ? `最近 ${d.log.length} 条` : '', desc: d.log.some((e) => e.status === 'hidden' && !e.nowVisible && !e.deleted) ? '「仅自己可见」= B站接受了，但被风控或审核藏起来了，别人看不到、被 @ 的人也收不到通知。有时审核过后会公开，可以过一阵再查。' : '' },
               d.log.some((e) => e.status === 'hidden' && !e.nowVisible && !e.deleted) && h('div', null, h(Btn, { onClick: recheck }, '再查一次可见性')),
               d.log.length

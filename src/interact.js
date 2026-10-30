@@ -2,7 +2,11 @@
 import { loadConfig } from './config.js';
 import { loadCredential } from './credential.js';
 import { InputError, makeClient, resolveVideo, clip } from './look.js';
-import { request, confirm, checkText, loadDrafts, ActError } from './act.js';
+import { request, confirm, checkText, loadDrafts, readAudit, ownFollows, FOLLOW_TAG, ActError } from './act.js';
+import { resolveUp } from './feed.js';
+import { watchedUp } from './seen-ups.js';
+import { parseInput } from './url.js';
+import { nativeApprover } from './gate.js';
 import { ensureDevice } from './device.js';
 import { loadInbox, saveInbox, checkInbox, deliver, inQuiet, formatInbox, markItems } from './inbox.js';
 
@@ -41,7 +45,7 @@ export async function writeClient(cfg) {
   return client;
 }
 
-const opts = (cfg, client, exec, extra = {}) => ({ cfg, client, sessionId: sessionIdOf(exec), via: 'tool', ...extra });
+const opts = (cfg, client, exec, extra = {}) => ({ cfg, client, sessionId: sessionIdOf(exec), session: exec?.agent?.session ?? null, approve: nativeApprover(exec), via: 'tool', ...extra });
 
 async function afterSent(r, inboxId) {
   if (r.status === 'sent' && inboxId) { const st = loadInbox(); if (markItems(st, [inboxId], 'done')) saveInbox(st); }
@@ -99,6 +103,51 @@ export async function postTool(args, exec, { cfg = loadConfig() } = {}) {
   try { text = checkText('post', args.text, { ownerName: await ownerName(client, cfg).catch(() => '') }); } catch (e) { if (e instanceof ActError) return { status: 'refused', text: `没发：${e.message}` }; throw e; }
   if (text.includes('@')) return { status: 'refused', text: '没发：动态里不 @ 人' };
   return request({ kind: 'post', payload: { text }, preview: `动态：${clip(text, 60)}`, target: {} }, opts(cfg, client, exec));
+}
+
+/**
+ * up 可以是 UID、昵称、空间链接，或者视频链接 / BV 号（取 UP 主）。返回 {mid, name}。
+ */
+export async function resolveFollowTarget(client, up) {
+  const s = String(up ?? '').trim();
+  if (!s) throw new InputError('要给 up：UID、昵称、空间链接或视频链接');
+  const space = /space\.bilibili\.com\/(\d{1,19})/.exec(s);
+  if (space) return resolveUp(client, space[1]);
+  let video = null;
+  try { video = parseInput(s); } catch { video = null; }
+  if (video && (video.kind === 'short' || video.kind === 'video') && !/^\d{1,19}$/.test(s)) {
+    const { v } = await resolveVideo(s, client);
+    return { mid: Number(v.owner?.mid), name: v.owner?.name ?? '' };
+  }
+  return resolveUp(client, s);
+}
+
+export async function followTool(args, exec, { cfg = loadConfig() } = {}) {
+  const kind = args.action === 'unfollow' ? 'unfollow' : 'follow';
+  const why = String(args.why ?? '').replace(/\s+/g, ' ').trim();
+  if (!why) throw new InputError('要写 why：为什么关注 / 取关（一句话，会记下来给主人看）');
+  if (why.length > 60) throw new InputError('why 最多 60 个字');
+  const client = await writeClient(cfg);
+  const u = await resolveFollowTarget(client, args.up);
+  if (!(u?.mid > 0)) throw new InputError('没找到这个 UP 主');
+  if (u.mid === Number(client.cookies.DedeUserID)) return { status: 'refused', text: '没发：不能关注自己' };
+  const attr = (await client.relation(u.mid).catch(() => ({ attribute: -1 }))).attribute;
+  if (kind === 'follow' && (attr === 2 || attr === 6)) return { status: 'refused', text: `已经关注「${u.name}」了` };
+  if (kind === 'unfollow' && attr === 0) return { status: 'refused', text: `本来就没关注「${u.name}」` };
+  const seen = watchedUp(u.mid);
+  let own = false;
+  if (kind === 'unfollow') {
+    own = ownFollows(readAudit(2000)).some((f) => f.mid === u.mid);
+    if (!own) {
+      // 审计只留最近的记录：再看她的分组里有没有这个人
+      try {
+        const tag = (await client.relationTags()).find((t) => t.name === FOLLOW_TAG);
+        if (tag) own = (await client.relationTagMembers(tag.tagid)).some((m) => m.mid === u.mid);
+      } catch { /* 查不到就按不是她关注的处理 */ }
+    }
+  }
+  const preview = `${kind === 'follow' ? '关注' : '取关'} UP 主「${u.name}」：${clip(why, 40)}${seen ? `（看过他的《${clip(seen.title, 20)}》）` : ''}`;
+  return request({ kind, payload: { mid: u.mid }, preview, target: { mid: String(u.mid), name: u.name, why }, watched: Boolean(seen), own }, opts(cfg, client, exec));
 }
 
 export async function confirmTool(args, exec, { cfg = loadConfig() } = {}) {
@@ -159,7 +208,8 @@ export async function pollInbox({ force = false, cfg = loadConfig(), now = Date.
  * 拼一个 ask({system, user, maxTokens}) → Promise<string>。
  * 模型：设置里的 surfModel → 调用它的会话正在用的 → 宿主默认；都没有返回 null（surf 会退回不用模型）。
  */
-export function makeAsk(llm, exec, cfg, host = null) {
+/** 用哪个模型：设置里的 surfModel → 调用它的会话正在用的 → 宿主默认。都没有返回 null。 */
+export function modelTarget(llm, exec, cfg, host = null) {
   if (!llm?.stream) return null;
   let target = null;
   const m = /^([^\s/]+)\/(\S+)$/.exec(cfg.surfModel || '');
@@ -173,10 +223,30 @@ export function makeAsk(llm, exec, cfg, host = null) {
   if (!target) {
     try { const sel = host?.get?.('agentDefaultModel')?.currentSelection?.(); if (sel?.provider && sel?.model) target = { provider: sel.provider, model: sel.model }; } catch { /* 同上 */ }
   }
+  return target;
+}
+
+/**
+ * 这个模型最省的思考档位（挑选、总结、顺着逛都不需要深度思考）。模型没有思考档位时返回 undefined（不传）。
+ * 适配器默认是 high，不传会白花思考 token。
+ */
+export async function lowestEffort(llm, target) {
+  try {
+    const info = await llm.resolveModelInfo?.(target.provider, target.model);
+    const ids = (info?.reasoning?.efforts ?? []).map((e) => e.id);
+    return ['off', 'none', 'minimal', 'low'].find((x) => ids.includes(x));
+  } catch { return undefined; }
+}
+
+export function makeAsk(llm, exec, cfg, host = null) {
+  const target = modelTarget(llm, exec, cfg, host);
   if (!target) return null;
-  return async ({ system, user, maxTokens = 800 }) => {
+  let effort;   // 第一次调用时查
+  const ask = async ({ system, user, maxTokens = 800, timeoutMs = 90_000 }) => {
+    if (effort === undefined) effort = (await lowestEffort(llm, target)) ?? null;
     let out = '';
-    for await (const chunk of llm.stream({ provider: target.provider, model: target.model, system, messages: [{ role: 'user', content: [{ type: 'text', text: user }] }], maxTokens, temperature: 0.3 })) {
+    const signal = AbortSignal.timeout(timeoutMs);
+    for await (const chunk of llm.stream({ provider: target.provider, model: target.model, system, messages: [{ role: 'user', content: [{ type: 'text', text: user }] }], maxTokens, temperature: 0.3, signal, ...(effort ? { reasoningEffort: effort } : {}) })) {
       if (chunk?.type === 'text-delta') out += chunk.text;
       if (chunk?.type === 'finish' && (chunk.reason?.kind === 'error' || chunk.reason?.kind === 'aborted')) {
         throw new Error(chunk.reason.failure?.message || chunk.reason.failure?.code || chunk.reason.kind);
@@ -184,4 +254,9 @@ export function makeAsk(llm, exec, cfg, host = null) {
     }
     return out;
   };
+  // bili_surf 的「顺着逛」要自己多轮调模型：把模型服务和目标挂在 ask 上带过去
+  ask.llm = llm;
+  ask.target = target;
+  ask.effort = async () => { if (effort === undefined) effort = (await lowestEffort(llm, target)) ?? null; return effort ?? undefined; };
+  return ask;
 }

@@ -116,7 +116,7 @@ test('草稿：设置页同意直接发；过期作废；没配门卫时模型�
   const f = files(); const client = fakeClient();
   const cfg = cfgOf({ commentMode: 'approve' });
   const d = await request(commentReq('20'), { cfg, client, ...f });
-  assert.match((await confirm(d.draft.id, 'send', { cfg, client, ...f })).text, /没配门卫/);
+  assert.match((await confirm(d.draft.id, 'send', { cfg, client, ...f })).text, /没接门卫/);
   assert.equal((await confirm(d.draft.id, 'send', { cfg, client, via: 'ui', ...f })).status, 'sent');
   const d2 = await request(commentReq('21'), { cfg, client, ...f });
   assert.match((await confirm(d2.draft.id, 'send', { cfg, client, via: 'ui', now: Date.now() + 61 * 60_000, ...f })).text, /过期/);
@@ -350,4 +350,130 @@ test('发评论带上网页端的字段；设备标识固定、ticket 签名正�
   const again = { cookies: { SESSDATA: 's', bili_jct: 'c' }, request: async () => { throw new Error('不该再请求'); } };
   await ensureDevice(again, { file, now: 100_000 });
   assert.equal(again.cookies.buvid3, 'B3', '第二次直接用存下来的');
+});
+
+// ── 关注 ──────────────────────────────────────────────────────────────────
+function followClient({ attr = 2, failWith = null } = {}) {
+  const calls = [];
+  const tags = [];
+  return {
+    calls,
+    cookies: { DedeUserID: '1' },
+    modifyRelation: async (mid, act) => { calls.push(['modify', mid, act]); if (failWith) { const e = new Error('x'); e.code = failWith; throw e; } },
+    relation: async () => ({ attribute: attr }),
+    relationTags: async () => tags,
+    createRelationTag: async (name) => { calls.push(['tag', name]); tags.push({ tagid: 9, name }); return 9; },
+    addToRelationTag: async (mid, tagid) => { calls.push(['addTag', mid, tagid]); },
+  };
+}
+const followReq = (o = {}) => ({ kind: 'follow', payload: { mid: 77 }, preview: '关注', target: { mid: '77', name: 'UP', why: '好看' }, watched: true, ...o });
+
+test('关注：直接发只对看过的 UP 主；发完核实并放进她的分组', async () => {
+  const { setVerifyDelay } = await import('../src/act.js');
+  setVerifyDelay(1);
+  const f = files(); const client = followClient();
+  const cfg = cfgOf({ followMode: 'auto' });
+  const notSeen = await request(followReq({ watched: false, payload: { mid: 76 }, target: { mid: '76' } }), { cfg, client, ...f });
+  assert.equal(notSeen.status, 'draft');
+  assert.match(notSeen.text, /14 天没看过/);
+  const r = await request(followReq(), { cfg, client, ...f });
+  assert.equal(r.status, 'sent');
+  assert.match(r.text, /已关注（已核实）/);
+  assert.deepEqual(client.calls.map((c) => c[0]), ['modify', 'tag', 'addTag']);
+  // 10 分钟内不能再关注
+  const again = await request(followReq({ payload: { mid: 78 }, target: { mid: '78' } }), { cfg, client, ...f, now: Date.now() + 60_000 });
+  assert.match(again.text, /关注太近/);
+});
+
+test('关注：核实不到就记 unconfirmed、关注暂停 24 小时；22009 关掉关注', async () => {
+  const f = files();
+  const r = await request(followReq(), { cfg: cfgOf({ followMode: 'auto' }), client: followClient({ attr: 0 }), ...f });
+  assert.equal(r.status, 'failed');
+  assert.match(r.text, /暂停 24 小时/);
+  assert.equal(readAudit(10, f.auditFile)[0].status, 'unconfirmed');
+  const later = await request(followReq(), { cfg: cfgOf({ followMode: 'auto' }), client: followClient(), ...f, now: Date.now() + 3600_000 });
+  assert.match(later.text, /关注暂停到/);
+  const g = files();
+  const full = await request(followReq(), { cfg: cfgOf({ followMode: 'auto' }), client: followClient({ failWith: 22009 }), ...g });
+  assert.match(full.text, /已经把「关注」关掉/);
+  const { loadConfig } = await import('../src/config.js');
+  assert.equal(loadConfig().followMode, 'off');
+  const h = files();
+  const priv = await request(followReq(), { cfg: cfgOf({ followMode: 'auto' }), client: followClient({ failWith: 22002 }), ...h });
+  assert.doesNotMatch(priv.text, /暂停/);
+});
+
+test('取关：只能取关她自己关注的；直接发也要先问主人', async () => {
+  const f = files(); const client = followClient({ attr: 0 });
+  const cfg = cfgOf({ followMode: 'auto' });
+  const notOwn = await request({ ...followReq(), kind: 'unfollow', own: false }, { cfg, client, ...f });
+  assert.equal(notOwn.status, 'refused');
+  assert.match(notOwn.text, /自己关注的人/);
+  const own = await request({ ...followReq(), kind: 'unfollow', own: true }, { cfg, client, ...f });
+  assert.equal(own.status, 'draft');
+});
+
+test('她的关注：关注成功、之后取关的不算', async () => {
+  const { ownFollows } = await import('../src/act.js');
+  const e = (at, kind, mid, status = 'ok') => ({ at, kind, status, target: { mid: String(mid), name: `u${mid}` } });
+  const list = ownFollows([e(5, 'unfollow', 2), e(4, 'follow', 3, 'fail'), e(3, 'follow', 2), e(2, 'follow', 1), e(1, 'like', 9)]);
+  assert.deepEqual(list.map((x) => x.mid), [1]);
+});
+
+test('关注接口：不带 WBI、字段和空间页一致', async () => {
+  const seen = [];
+  const c = new BiliClient({ cookies: { SESSDATA: 's', bili_jct: 'j', DedeUserID: '1' }, minIntervalMs: 0, fetchImpl: async (url, init) => { seen.push({ url, init }); return { ok: true, status: 200, json: async () => ({ code: 0, data: {} }) }; } });
+  await c.modifyRelation(77, 1);
+  const { url, init } = seen[0];
+  assert.match(url, /x\/relation\/modify\?statistics=/);
+  assert.doesNotMatch(url, /w_rid/);
+  const form = new URLSearchParams(init.body);
+  assert.equal(form.get('fid'), '77');
+  assert.equal(form.get('act'), '1');
+  assert.equal(form.get('csrf'), 'j');
+  assert.equal(form.get('gaia_source'), 'web_main');
+  assert.equal(JSON.parse(form.get('extend_content')).entity_id, 77);
+});
+
+// ── 内置门卫 ──────────────────────────────────────────────────────────────
+test('内置门卫：沿父会话找到根，桥接 preset / 不可信目录判成不可信', async () => {
+  const { sessionInfo, judgeBuiltin } = await import('../src/gate.js');
+  const root = { header: { id: 'r', agentPreset: 'qq-chat-group' } };
+  const sub = { header: { id: 's', parentSession: 'r', origin: 'subagent' } };
+  const sessions = { get: (id) => ({ r: root }[id]) };
+  const info = sessionInfo({ session: sub }, sessions);
+  assert.deepEqual(info.chain.map((h) => h.id), ['s', 'r']);
+  assert.equal(judgeBuiltin(cfgOf(), info.chain).trusted, false);
+  assert.equal(judgeBuiltin(cfgOf(), [{ id: 'a', agentPreset: 'default' }]).trusted, true);
+  assert.equal(judgeBuiltin(cfgOf({ untrustedCwd: 'E:\\fish\\qq\n' }), [{ id: 'a', cwd: 'e:\\fish\\qq\\work' }]).trusted, false);
+  assert.equal(judgeBuiltin(cfgOf({ untrustedCwd: 'E:/fish/qq' }), [{ id: 'a', cwd: 'E:/fish/qq2' }]).trusted, true, '前缀相同但不是子目录');
+  assert.equal(judgeBuiltin(cfgOf({ untrustedPresets: 'zzz' }), [{ id: 'a', agentPreset: 'qq-chat' }]).trusted, true);
+});
+
+test('内置门卫：可信会话弹审批卡片，允许就发、拒绝不发、没人答就起草；桥接会话直接起草', async () => {
+  const cfg = cfgOf({ commentMode: 'approve' });
+  const trusted = { header: { id: 't', agentPreset: 'default' } };
+  const bridge = { header: { id: 'b', agentPreset: 'qq-chat' } };
+  for (const [answer, status] of [['allowed-once', 'sent'], ['rejected', 'refused'], ['unavailable', 'draft']]) {
+    const f = files(); const asked = [];
+    const r = await request(commentReq('30'), { cfg, client: fakeClient(), session: trusted, sessionId: 't', approve: async (t) => { asked.push(t); return answer; }, ...f });
+    assert.equal(r.status, status, answer);
+    assert.match(asked[0], /B站评论/);
+  }
+  const f = files(); let asked = 0;
+  const r = await request(commentReq('31'), { cfg, client: fakeClient(), session: bridge, sessionId: 'b', approve: async () => { asked += 1; return 'allowed-once'; }, ...f });
+  assert.equal(r.status, 'draft');
+  assert.equal(asked, 0, '桥接会话里不弹卡片（群里谁都能点）');
+  const auto = await request(commentReq('32'), { cfg: cfgOf({ commentMode: 'auto' }), client: fakeClient(), session: bridge, sessionId: 'b', ...files() });
+  assert.equal(auto.status, 'draft', '桥接会话里「直接发」也只起草');
+});
+
+test('进程内门卫服务优先于 HTTP，并带上会话说明', async () => {
+  const { sessionContext, hello } = await import('../src/gate.js');
+  const seen = [];
+  const service = { context: async (b) => { seen.push(b); return { trusted: true, label: '主人私聊' }; }, hello: async () => ({ protocol: 1, actions: ['context'], name: 'test' }) };
+  const r = await sessionContext(cfgOf({ gateUrl: 'http://127.0.0.1:1/x' }), { sessionId: 's', session: { header: { id: 's', agentPreset: 'qq-chat', cwd: 'E:\q' } } }, { service });
+  assert.deepEqual([r.trusted, r.gate], [true, 'service']);
+  assert.equal(seen[0].session.agentPreset, 'qq-chat');
+  assert.equal((await hello(cfgOf(), { service })).protocol, 1);
 });

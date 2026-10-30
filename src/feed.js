@@ -23,7 +23,7 @@ export function formatVideoList(heading, items) {
 }
 
 /** 「up」可以是 UID 或昵称 → mid */
-async function resolveUp(client, up) {
+export async function resolveUp(client, up) {
   const s = String(up ?? '').trim();
   if (!s) throw new InputError('看 UP 主投稿要给 up（UID 或昵称）');
   if (/^\d{1,19}$/.test(s)) return { mid: Number(s), name: (await client.card(s).catch(() => ({}))).name || s };
