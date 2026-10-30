@@ -117,9 +117,10 @@ function fakeBridgeSrc() {
   return { dir, bridge, restrict };
 }
 
-test('桥接补丁：打上、重复打不变、还原后和原文件一字不差；不像桥接的目录直接报错', () => {
+test('桥接补丁：打上、重复打不变、还原后和原文件一字不差；不像桥接的目录直接报错', async () => {
   const { dir, bridge, restrict } = fakeBridgeSrc();
-  assert.deepEqual([patchStatus(dir).card, patchStatus(dir).errors, patchStatus(dir).whitelist.missing.length], ['original', 'original', 13]);
+  const { ALL_TOOLS } = await import('../src/tool-list.js');
+  assert.deepEqual([patchStatus(dir).card, patchStatus(dir).errors, patchStatus(dir).whitelist.missing.length], ['original', 'original', ALL_TOOLS.length]);
   assert.ok(applyPatches(dir).every((s) => s.result === 'done'));
   const st = patchStatus(dir);
   assert.deepEqual([st.card, st.errors, st.whitelist.missing.length], ['patched', 'patched', 0]);

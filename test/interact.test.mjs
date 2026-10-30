@@ -77,7 +77,7 @@ test('同一视频只评论一次、每日额度、两次之间的间隔、全�
   assert.equal((await request(commentReq('2'), { cfg, client, now: t0 + 61_000, ...f })).status, 'sent');
   const like = { kind: 'like', payload: { aid: 5 }, preview: 'x', target: { oid: '5' } };
   assert.equal((await request(like, { cfg, client, now: t0 + 70_000, ...f })).status, 'sent');
-  assert.match((await request({ ...like, kind: 'fav' }, { cfg, client, now: t0 + 80_000, ...f })).text, /额度用完/);
+  assert.match((await request({ ...like, payload: { aid: 6 }, target: { oid: '6' } }, { cfg, client, now: t0 + 80_000, ...f })).text, /额度用完/);
   assert.match((await request(commentReq('3'), { cfg: { ...cfg, writePaused: true }, client, ...f })).text, /全部停下/);
   assert.equal(todayCounts(readAudit(100, f.auditFile), t0 + 90_000).comment, 2);
 });
@@ -529,4 +529,68 @@ test('关注分组名按设置来（别人装上不会多出别人角色名字�
   await request(req(91), { cfg: cfgOf({ followMode: 'auto' }), client, ...files() });
   assert.deepEqual(made, ['测试分组', DEFAULTS.followTag]);
   assert.doesNotMatch(DEFAULTS.followTag, /小鲸鱼/);
+});
+
+// ── 收藏 ──────────────────────────────────────────────────────────────────
+function favClient({ folders = [], favorite = true, like = true } = {}) {
+  const calls = []; const fs2 = [...folders];
+  return {
+    calls,
+    cookies: { DedeUserID: '1' },
+    likeVideo: async (aid) => { calls.push(['like', aid]); },
+    favFolders: async () => fs2,
+    createFavFolder: async (title) => { calls.push(['create', title]); fs2.push({ id: 88, title, count: 0 }); return 88; },
+    defaultFavFolder: async () => 1,
+    favVideo: async (aid, id) => { calls.push(['fav', aid, id]); },
+    unfavVideo: async (aid, id) => { calls.push(['unfav', aid, id]); },
+    archiveRelation: async () => ({ like, favorite, coin: 0, attention: false }),
+    favFolderVideos: async () => [],
+  };
+}
+const favReq = (o = {}) => ({ kind: 'fav', payload: { aid: 7 }, preview: '收藏《x》', target: { oid: '7', bvid: 'BV1xxxxxxxxx', title: 'x' }, ...o });
+
+test('收藏：放进她的收藏夹（没有就建），可以顺便点赞；发完核实；记下放在哪个收藏夹', async () => {
+  const { setVerifyDelay, ownFavs } = await import('../src/act.js');
+  setVerifyDelay(1);
+  const f = files(); const client = favClient();
+  const r = await request(favReq({ payload: { aid: 7, like: true } }), { cfg: cfgOf({ likeMode: 'auto', favFolder: '测试收藏夹' }), client, ...f });
+  assert.equal(r.status, 'sent');
+  assert.match(r.text, /点赞并收藏好了（放进「测试收藏夹」，B站上已核实）/);
+  assert.deepEqual(client.calls, [['like', 7], ['create', '测试收藏夹'], ['fav', 7, 88]]);
+  const mine = ownFavs(readAudit(10, f.auditFile));
+  assert.deepEqual([mine[0].aid, mine[0].folderId, mine[0].folder], [7, '88', '测试收藏夹']);
+  // 留空 = 默认收藏夹
+  const c2 = favClient();
+  await request(favReq({ payload: { aid: 8 }, target: { oid: '8' } }), { cfg: cfgOf({ likeMode: 'auto', favFolder: '' }), client: c2, ...files() });
+  assert.deepEqual(c2.calls, [['fav', 8, 1]]);
+});
+
+test('收藏：核实不到就照实说，不会暂停关注', async () => {
+  const f = files();
+  const r = await request(favReq(), { cfg: cfgOf({ likeMode: 'auto', favFolder: '' }), client: favClient({ favorite: false }), ...f });
+  assert.equal(r.status, 'failed');
+  assert.match(r.text, /查不到变化/);
+  assert.doesNotMatch(r.text, /关注/);
+  const { loadDrafts } = await import('../src/act.js');
+  assert.equal(loadDrafts(f.draftsFile).followPausedUntil, 0);
+});
+
+test('取消收藏：只能取消她自己收藏的；从当初那个收藏夹移出', async () => {
+  const f = files(); const cfg = cfgOf({ likeMode: 'auto', favFolder: '' });
+  const notOwn = await request({ ...favReq(), kind: 'unfav', own: false }, { cfg, client: favClient({ favorite: false }), ...f });
+  assert.match(notOwn.text, /只能取消她自己收藏的/);
+  const client = favClient({ favorite: false });
+  const r = await request({ ...favReq({ payload: { aid: 7, folderId: '88', folder: '她的' } }), kind: 'unfav', own: true }, { cfg, client, ...f });
+  assert.equal(r.status, 'sent');
+  assert.deepEqual(client.calls, [['unfav', 7, 88]]);
+  assert.match(r.text, /取消收藏好了（从「她的」移出/);
+});
+
+test('收藏的说法：「取消收藏吧」是同意取消，「别取消」是不同意', async () => {
+  const { judge } = await import('../src/act.js');
+  const m = (text) => [{ at: 1, text }];
+  assert.equal(judge(m('取消收藏吧'), 6, 'unfav'), 'yes');
+  assert.equal(judge(m('别取消'), 6, 'unfav'), 'no');
+  assert.equal(judge(m('收藏吧'), 6, 'fav'), 'yes');
+  assert.equal(judge(m('存一下'), 6, 'fav'), 'yes');
 });

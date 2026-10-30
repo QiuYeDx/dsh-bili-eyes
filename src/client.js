@@ -717,13 +717,14 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
       const draftDo = (id, decision) => api.post('draft', { id, decision }).then((r) => { toast(r.text, r.status === 'failed' || r.status === 'refused' && decision === 'send'); st.reload(); }, (e) => toast(e.message, true));
       const del = (id) => api.post('deleteSent', { id }).then(() => { toast('已在 B站删掉'); st.reload(); }, (e) => toast(e.message, true));
       const recheck = () => api.post('recheck').then((r) => { toast(r.checked ? `查了 ${r.checked} 条，${r.nowVisible} 条已经公开` : '没有要复查的'); st.reload(); }, (e) => toast(e.message, true));
+      const unfav = (aid) => api.post('unfav', { aid }).then((r) => { toast(r.text, r.status !== 'sent'); st.reload(); }, (e) => toast(e.message, true));
       const unfollow = (mid) => api.post('unfollow', { mid }).then((r) => { toast(r.text, r.status !== 'sent'); st.reload(); }, (e) => toast(e.message, true));
       const undoToday = () => api.post('undoTodayFollows').then((r) => { toast(r.total ? `今天关注了 ${r.total} 个，取关了 ${r.done} 个` : '今天没关注过谁', r.done < r.total); st.reload(); }, (e) => toast(e.message, true));
       const recheckF = () => api.post('recheckFollows').then((r) => toast(r.missing.length ? `查了 ${r.checked} 个，这些已经不在关注里：${r.missing.join('、')}` : `查了 ${r.checked} 个，都还在关注`, r.missing.length > 0), (e) => toast(e.message, true));
       return h(React.Fragment, null,
         h(Loading, { state: st }, (d) => {
           const lvl = d.login.level;
-          const kinds = [['like', '点赞/收藏', d.counts.like + (d.counts.fav ?? 0) || 0, d.quota.like], ['comment', '评论', d.counts.comment ?? 0, d.quota.comment], ['reply', '回复', d.counts.reply ?? 0, d.quota.reply], ['dm', '私信', d.counts.dm ?? 0, d.quota.dm], ['post', '动态', d.counts.post ?? 0, d.quota.post], ['follow', '关注', d.counts.follow ?? 0, d.quota.follow]];
+          const kinds = [['like', '点赞', d.counts.like ?? 0, d.quota.like], ['fav', '收藏', d.counts.fav ?? 0, d.quota.fav], ['comment', '评论', d.counts.comment ?? 0, d.quota.comment], ['reply', '回复', d.counts.reply ?? 0, d.quota.reply], ['dm', '私信', d.counts.dm ?? 0, d.quota.dm], ['post', '动态', d.counts.post ?? 0, d.quota.post], ['follow', '关注', d.counts.follow ?? 0, d.quota.follow]];
           const followedToday = d.follows.filter((f) => new Date(f.at).toDateString() === new Date().toDateString()).length;
           return h(React.Fragment, null,
             h('div', { className: 'be-grid' },
@@ -734,7 +735,7 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
                     lvl === 0 && h('div', { className: 'be-err' }, 'LV0（未转正）：B站不让发评论和弹幕。去 B站 App 答题转正后再打开「评论、回复」。'))
                   : h('div', { className: 'be-no' }, '没登录：去「概览」扫码登录（建议用小号）'),
                 h('div', { className: 'be-faint' }, d.owner.mid ? `主人：${d.owner.name || '（昵称没查到）'}（UID ${d.owner.mid}）` : '还没设置主人 UID：不能 @ 主人、不能私信'),
-                h('div', { className: 'be-row' }, Object.entries(d.modes).map(([k, m]) => h('span', { key: k, className: `be-badge ${MODE_TEXT[m][1]}` }, `${{ like: '点赞', comment: '评论', dm: '私信', post: '动态', follow: '关注' }[k]}：${MODE_TEXT[m][0]}`)))),
+                h('div', { className: 'be-row' }, Object.entries(d.modes).map(([k, m]) => h('span', { key: k, className: `be-badge ${MODE_TEXT[m][1]}` }, `${{ like: '点赞/收藏', comment: '评论', dm: '私信', post: '动态', follow: '关注' }[k]}：${MODE_TEXT[m][0]}`)))),
               h(Card, { title: '今天' },
                 (d.paused || d.pausedUntil > 0) && h('div', { className: 'be-err' }, d.paused ? '已按「全部停下」：所有写操作都会被拒绝' : `${d.pauseReason || '刚被 B站风控拦过'}：写操作暂停到 ${new Date(d.pausedUntil).toLocaleTimeString()}`),
                 d.followPausedUntil > 0 && h('div', { className: 'be-err' }, `${d.followPauseReason || '关注被 B站拦过'}：关注暂停到 ${new Date(d.followPausedUntil).toLocaleString()}`),
@@ -747,6 +748,15 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
                   x.target?.title && h('div', { className: 'be-faint' }, x.target.url ? h('a', { href: x.target.url, target: '_blank', rel: 'noreferrer', style: { color: 'inherit' } }, `《${x.target.title}》`) : `《${x.target.title}》`),
                   x.expired ? h('div', { className: 'be-faint' }, '已过期') : h('div', { className: 'be-row' }, h(Btn, { kind: 'primary', onClick: () => draftDo(x.id, 'send') }, '同意并发出'), h(Btn, { onClick: () => draftDo(x.id, 'drop') }, '丢掉')))))
                 : h('div', { className: 'be-empty' }, '没有待同意的草稿。')),
+            h(Card, { title: '她的收藏', aside: d.favs.length ? `${d.favs.length} 个` : '', desc: `她自己收藏的视频（在 B站的「${d.favFolder}」收藏夹里）。账号里原来就有的收藏不在这里，她也动不了。` },
+              d.favs.length
+                ? h('div', { className: 'be-hist' }, d.favs.map((f) => h('div', { key: f.aid, className: 'be-hrow' },
+                  h('div', { className: 'when' }, when(f.at)),
+                  h('div', { style: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 } },
+                    h('div', { className: 'be-htitle' }, h('a', { href: `https://www.bilibili.com/video/${f.bvid}`, target: '_blank', rel: 'noreferrer', title: f.title }, f.title || f.bvid)),
+                    f.why && h('div', { className: 'be-faint' }, f.why),
+                    h('div', null, h(ConfirmBtn, { label: '取消收藏', confirmLabel: '确认取消？', onConfirm: () => unfav(f.aid) }))))))
+                : h('div', { className: 'be-empty' }, '她还没收藏过视频。')),
             h(Card, { title: '她的关注', aside: d.follows.length ? `${d.follows.length} 个` : '', desc: `她自己关注的 UP 主（都在 B站的「${d.followTag}」分组里）。号上原来就有的关注不在这里，她也动不了。` },
               d.follows.length > 0 && h('div', { className: 'be-row' },
                 followedToday > 0 && h(ConfirmBtn, { label: `撤销今天的 ${followedToday} 个关注`, confirmLabel: '确认全部取关？', onConfirm: undoToday }),

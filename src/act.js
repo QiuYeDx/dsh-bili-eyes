@@ -16,9 +16,9 @@ export const ACTIONS_FILE = path.join(DATA_DIR, 'actions.jsonl');
 
 export class ActError extends Error {}
 
-export const KIND_TEXT = { like: '点赞', fav: '点赞+收藏', comment: '评论', reply: '回复', dm: '私信', post: '动态', follow: '关注', unfollow: '取关' };
-const MODE_KEY = { like: 'likeMode', fav: 'likeMode', comment: 'commentMode', reply: 'commentMode', dm: 'dmMode', post: 'postMode', follow: 'followMode', unfollow: 'followMode' };
-const QUOTA_KEY = { like: 'likePerDay', fav: 'likePerDay', comment: 'commentPerDay', reply: 'replyPerDay', dm: 'dmPerDay', post: 'postPerDay', follow: 'followPerDay', unfollow: 'followPerDay' };
+export const KIND_TEXT = { like: '点赞', fav: '收藏', unfav: '取消收藏', comment: '评论', reply: '回复', dm: '私信', post: '动态', follow: '关注', unfollow: '取关' };
+const MODE_KEY = { like: 'likeMode', fav: 'likeMode', unfav: 'likeMode', comment: 'commentMode', reply: 'commentMode', dm: 'dmMode', post: 'postMode', follow: 'followMode', unfollow: 'followMode' };
+const QUOTA_KEY = { like: 'likePerDay', fav: 'favPerDay', unfav: 'favPerDay', comment: 'commentPerDay', reply: 'replyPerDay', dm: 'dmPerDay', post: 'postPerDay', follow: 'followPerDay', unfollow: 'followPerDay' };
 // 关注：两次之间至少 10 分钟，每天最多 10 个（设置里只能调低）；取关最高只到「先问主人」
 const FOLLOW = new Set(['follow', 'unfollow']);
 const FOLLOW_GAP_S = 600;
@@ -26,9 +26,9 @@ const FOLLOW_HARD_CAP = 10;
 const DEFAULT_FOLLOW_TAG = DEFAULTS.followTag;
 const FOLLOW_STOP = new Set([22002, 22003, 22013, 40061]);   // 只是这一个人关注不了，不暂停
 // 「没发：…」对关注、点赞读着别扭：按操作说「没关注」「没点赞」
-export const NOT_DONE = { like: '没点赞', fav: '没点赞收藏', comment: '没发评论', reply: '没回复', dm: '没发私信', post: '没发动态', follow: '没关注', unfollow: '没取关' };
+export const NOT_DONE = { like: '没点赞', fav: '没收藏', unfav: '没取消收藏', comment: '没发评论', reply: '没回复', dm: '没发私信', post: '没发动态', follow: '没关注', unfollow: '没取关' };
 const MAX_LEN = { comment: 300, reply: 300, dm: 500, post: 500 };
-const LIGHT = new Set(['like', 'fav']);           // 轻操作：间隔只要 5 秒
+const LIGHT = new Set(['like', 'fav', 'unfav']);  // 轻操作：间隔只要 5 秒
 const HIDDEN_PAUSE_MS = 2 * 3600_000;           // 评论被设成「仅自己可见」后，写操作暂停 2 小时（接着发只会更糟）
 const SENT = new Set(['ok', 'hidden']);          // 算「发出去了」的状态（计额度、判重复）
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -131,11 +131,13 @@ const NO_RE = /(不发|别发|不要|不用|算了|取消|不行|不可以|别�
 const YES_WORDS = ['发出去', '发吧', '发', '可以', '行', '好的', '好', '嗯', '是的', '是', '对的', '对', '没问题', '同意', '批准', '准了', '去吧', '去', '冲', 'okay', 'okk', 'ok', 'yes', 'go', '就这样', '就这么办', '确认', '按', '搞', '弄', '整'];
 const FILLER = ['一下', '下', '给我', '帮我', '就', '快', '赶紧', '那就', '那', '这个', '它', '他', '她', '吧', '呗'];
 export const ACTION_WORDS = {
-  like: ['点赞', '点', '赞'], fav: ['点赞', '收藏', '点', '赞', '收'],
+  like: ['点赞', '点', '赞'], fav: ['点赞', '收藏', '点', '赞', '收', '藏', '存'], unfav: ['取消收藏', '取消', '移出', '删掉', '删', '不收藏'],
   comment: ['评论', '回复', '回', '留言', '评'], reply: ['回复', '回', '评论'],
   dm: ['私信', '发私信'], post: ['发动态', '动态'],
   follow: ['关注', '关', '粉'], unfollow: ['取关', '取消关注', '不关注', '别关注'],
 };
+// 撤销类操作（取关、取消收藏）的话本身就带「取消」「不关注」，判断拒绝前先去掉
+const undoText = (t, kind) => (kind === 'unfollow' ? t.replace(/取消关注|不关注了?/g, '') : kind === 'unfav' ? t.replace(/取消收藏|不收藏了?|移出收藏/g, '') : t);
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const yesRe = (kind) => new RegExp(`^(?:${[...(ACTION_WORDS[kind] ?? []), ...YES_WORDS, ...FILLER].sort((a, b) => b.length - a.length).map(esc).join('|')})+$`, 'i');
 
@@ -161,8 +163,8 @@ export function judge(messages, draftId, kind = '') {
     const num = /#\s*(\d{1,4})\b|(?:^|\s)(\d{1,4})\s*号?(?=\s|$)/.exec(t);
     const n = num ? Number(num[1] ?? num[2]) : null;
     if (n != null && n !== Number(draftId)) continue;
-    // 取关时「不关注了」是同意，不是拒绝
-    if (NO_RE.test(kind === 'unfollow' ? t.replace(/取消关注|不关注了?/g, '') : t)) return 'no';
+    // 取关时「不关注了」、取消收藏时「取消收藏吧」是同意，不是拒绝
+    if (NO_RE.test(undoText(t, kind))) return 'no';
     if (/[?？]/.test(t)) continue;   // 「嗯？」「发？」是在问，不是同意
     if (isYes(t, kind)) return 'yes';
   }
@@ -172,7 +174,7 @@ export function judge(messages, draftId, kind = '') {
 // 主人自己开口要她做的：点名了这类操作的词（只用两个字以上的、或不会误会的）
 const OWNER_ASK_MS = 5 * 60_000;
 const ASK_WORDS = {
-  like: ['点赞', '赞', '收藏'], fav: ['点赞', '赞', '收藏'], comment: ['评论', '留言'], reply: ['回复', '回一下', '回他', '回她', '回个'],
+  like: ['点赞', '赞'], fav: ['收藏'], unfav: ['取消收藏', '移出收藏'], comment: ['评论', '留言'], reply: ['回复', '回一下', '回他', '回她', '回个'],
   dm: ['私信'], post: ['动态'], follow: ['关注'], unfollow: ['取关', '取消关注'],
 };
 /** 主人最近的话里，有没有一句是在要她做这类操作。有就返回那句话。 */
@@ -181,7 +183,7 @@ export function ownerAsked(messages, kind) {
   for (const m of [...messages].sort((a, b) => b.at - a.at)) {
     const t = String(m.text ?? '').trim();
     if (!t || t.length > 40 || /[?？]/.test(t)) continue;
-    if (NO_RE.test(kind === 'unfollow' ? t.replace(/取消关注|不关注了?/g, '') : t)) continue;
+    if (NO_RE.test(undoText(t, kind))) continue;
     if (/(别|不要|不用|不准|不许|没让|不是让|禁止)/.test(t)) continue;   // 「别乱关注」「不要点赞」
     if (words.some((w) => t.includes(w))) return t;
   }
@@ -190,7 +192,7 @@ export function ownerAsked(messages, kind) {
 
 /** 给模型看的：这类操作，主人怎么回算同意（举例，不是规定）。 */
 export function yesExamples(kind) {
-  const verb = { like: '点吧', fav: '点吧', comment: '发吧', reply: '回吧', dm: '发吧', post: '发吧', follow: '关注吧', unfollow: '取关吧' }[kind] ?? '发吧';
+  const verb = { like: '点吧', fav: '收藏吧', unfav: '取消吧', comment: '发吧', reply: '回吧', dm: '发吧', post: '发吧', follow: '关注吧', unfollow: '取关吧' }[kind] ?? '发吧';
   return `「可以」「嗯」「${verb}」`;
 }
 
@@ -247,15 +249,52 @@ async function performFollow(client, d, tagName) {
   return { unconfirmed: !confirmed, state: attr, info: confirmed ? `${KIND_TEXT[d.kind]}好了（B站上已核实）${tagNote}` : `${KIND_TEXT[d.kind]}请求 B站 接受了，但查不到关系变化` };
 }
 
+/** 设置里的收藏夹（没有就建）；favFolder 留空 = 默认收藏夹。返回 {id, title}。 */
+export async function favFolderFor(client, cfg) {
+  const name = String(cfg?.favFolder ?? '').trim();
+  if (!name) return { id: await client.defaultFavFolder(), title: '默认收藏夹' };
+  const hit = (await client.favFolders()).find((f) => f.title === name);
+  return hit ?? { id: await client.createFavFolder(name), title: name };
+}
+
+/**
+ * 收藏（可同时点赞）/ 取消收藏，发完核实：隔 1.5、3、6 秒各查一次这个视频和我的关系。
+ * 取消收藏只从当初放进去的那个收藏夹移出；它要是还在别的收藏夹里，B站仍显示已收藏，这时看那个收藏夹里还有没有它。
+ */
+async function performFav(client, d, cfg) {
+  const p = d.payload; const aid = Number(p.aid);
+  const fav = d.kind === 'fav';
+  if (fav && p.like) { try { await client.likeVideo(aid); } catch (e) { if (e?.code !== 65006) throw e; } }
+  const folder = fav || !p.folderId ? await favFolderFor(client, cfg) : { id: Number(p.folderId), title: p.folder || '收藏夹' };
+  if (fav) await client.favVideo(aid, folder.id); else await client.unfavVideo(aid, folder.id);
+  let rel = null; let ok = false;
+  for (const wait of [verifyDelayMs * 0.75, verifyDelayMs * 1.5, verifyDelayMs * 3]) {
+    await sleep(wait);
+    try { rel = await client.archiveRelation(aid); } catch { rel = null; }
+    ok = fav ? Boolean(rel?.favorite && (!p.like || rel.like)) : rel?.favorite === false;
+    if (ok) break;
+  }
+  let note = '';
+  if (!fav && !ok && rel?.favorite) {
+    const still = await client.favFolderVideos(folder.id, 20).then((l) => l.some((x) => x.aid === aid), () => null);
+    if (still === false) { ok = true; note = '（它还在别的收藏夹里）'; }
+  }
+  const what = fav ? `${p.like ? '点赞并' : ''}收藏` : '取消收藏';
+  return {
+    unconfirmed: !ok, state: rel ? `favorite=${rel.favorite}${p.like ? `, like=${rel.like}` : ''}` : null, folderId: folder.id, folderTitle: folder.title,
+    info: ok ? `${what}好了（${fav ? '放进' : '从'}「${folder.title}」${fav ? '' : '移出'}，B站上已核实）${note}` : `${what}请求 B站 接受了，但查不到变化`,
+  };
+}
+
 /** 真正发请求。返回 {rpid?, info, state?, hidden?}。 */
 async function perform(client, d, cfg) {
   const p = d.payload;
-  if (d.kind === 'like' || d.kind === 'fav') {
+  if (d.kind === 'like') {
     try { await client.likeVideo(p.aid); }
     catch (e) { if (e?.code !== 65006) throw e; }   // 65006 = 已经赞过
-    if (d.kind === 'fav') await client.favVideo(p.aid, await client.defaultFavFolder());
-    return { info: d.kind === 'fav' ? '点赞并收藏好了' : '点赞好了' };
+    return { info: '点赞好了' };
   }
+  if (d.kind === 'fav' || d.kind === 'unfav') return performFav(client, d, cfg);
   if (d.kind === 'comment' || d.kind === 'reply') {
     const r = await client.addComment({ oid: p.oid, type: p.type, message: p.text, root: p.root, parent: p.parent, atNameToMid: p.atNameToMid });
     const rpid = String(r?.rpid_str ?? r?.rpid ?? '');
@@ -289,8 +328,9 @@ export async function request(req, { cfg, client, sessionId = '', session = null
 
   const entries = readAudit(2000, auditFile);
   if (kind === 'unfollow' && !req.own) return refuse('只能取关她自己关注的人（号上原来就有的关注不能动）');
+  if (kind === 'unfav' && !req.own) return refuse('只能取消她自己收藏的视频（账号里原来就有的收藏不能动）');
   const quota = FOLLOW.has(kind) ? Math.min(FOLLOW_HARD_CAP, cfg[QUOTA_KEY[kind]]) : cfg[QUOTA_KEY[kind]];
-  const used = (todayCounts(entries, now)[kind] ?? 0) + (kind === 'fav' ? todayCounts(entries, now).like ?? 0 : kind === 'like' ? todayCounts(entries, now).fav ?? 0 : 0);
+  const used = todayCounts(entries, now)[kind] ?? 0;
   if (used >= quota) return refuse(`今天的「${KIND_TEXT[kind]}」额度用完了（${used}/${quota}）`);
   if (kind === 'comment' && entries.some((e) => e.kind === 'comment' && SENT.has(e.status) && e.target?.oid === String(req.payload.oid))) return refuse('这个视频下面我已经评论过了（同一个视频只发一条顶层评论）');
   if (kind === 'reply' && entries.filter((e) => e.kind === 'reply' && SENT.has(e.status) && e.target?.parent === String(req.payload.parent)).length >= 2) return refuse('这条评论我已经回过两次了');
@@ -349,8 +389,8 @@ async function send(d, { cfg, client, entries = readAudit(2000), now = Date.now(
     const r = await perform(client, d, cfg);
     if (r.unconfirmed) {
       audit({ kind: d.kind, status: 'unconfirmed', how, draft: draftId, target: d.target, state: r.state }, auditFile);
-      pauseFollow(draftsFile, now + 24 * 3600_000, `上一次${KIND_TEXT[d.kind]}没核实到`);
-      return { status: 'failed', text: `${r.info}（关系状态 ${r.state ?? '查不到'}）。照实告诉主人，别说「${KIND_TEXT[d.kind]}好了」；关注先暂停 24 小时。` };
+      if (FOLLOW.has(d.kind)) pauseFollow(draftsFile, now + 24 * 3600_000, `上一次${KIND_TEXT[d.kind]}没核实到`);
+      return { status: 'failed', text: `${r.info}（状态 ${r.state ?? '查不到'}）。照实告诉主人，别说「${KIND_TEXT[d.kind]}好了」${FOLLOW.has(d.kind) ? '；关注先暂停 24 小时' : '，也别马上重试'}。` };
     }
     if (r.hidden) {
       audit({ kind: d.kind, status: 'hidden', how, draft: draftId, target: d.target, text: d.payload?.text, rpid: r.rpid ?? '', state: r.state }, auditFile);
@@ -360,7 +400,7 @@ async function send(d, { cfg, client, entries = readAudit(2000), now = Date.now(
       saveDrafts(drafts, draftsFile);
       return { status: 'hidden', rpid: r.rpid, text: `${KIND_TEXT[d.kind]}发出去了，但 B站把它设成了「仅自己可见」（风控或审核，状态 ${r.state}），别人看不到，被 @ 的人也收不到通知。照实告诉主人，别说「发好了」，也别换个说法重发；写操作先暂停 2 小时。` };
     }
-    audit({ kind: d.kind, status: 'ok', how, draft: draftId, target: d.target, text: d.payload?.text, rpid: r.rpid ?? '', state: r.state ?? null }, auditFile);
+    audit({ kind: d.kind, status: 'ok', how, draft: draftId, target: r.folderId ? { ...d.target, folderId: String(r.folderId), folder: r.folderTitle } : d.target, text: d.payload?.text, rpid: r.rpid ?? '', state: r.state ?? null }, auditFile);
     const unsure = r.state == null && (d.kind === 'comment' || d.kind === 'reply') ? '（没能确认别人看不看得到）' : '';
     return { status: 'sent', text: `${r.info}：${clip(d.preview, 80)}${unsure}`, rpid: r.rpid };
   } catch (e) {
@@ -392,6 +432,25 @@ function pauseFollow(draftsFile, until, reason) {
   drafts.followPausedUntil = until;
   drafts.followPauseReason = reason;
   saveDrafts(drafts, draftsFile);
+}
+
+/** 她收藏的视频：审计里收藏成功、之后没取消的。[{aid, bvid, title, folderId, folder, at, why}]，新的在前。 */
+export function ownFavs(entries) {
+  const out = new Map();
+  for (const e of [...entries].reverse()) {   // 旧 → 新
+    const aid = Number(e.target?.oid ?? e.target?.aid);
+    if (!aid || !SENT.has(e.status)) continue;
+    if (e.kind === 'fav') out.set(aid, { aid, bvid: e.target.bvid ?? '', title: e.target.title ?? '', folderId: e.target.folderId ?? '', folder: e.target.folder ?? '', at: e.at, why: e.target.why ?? '' });
+    if (e.kind === 'unfav') out.delete(aid);
+  }
+  return [...out.values()].reverse();
+}
+
+/** 设置页：主人直接取消她收藏的某个视频（不看档位，只看是不是她收藏的）。 */
+export async function ownerUnfav(aid, { cfg, client, auditFile = ACTIONS_FILE, draftsFile = DRAFTS_FILE, now = Date.now() } = {}) {
+  const f = ownFavs(readAudit(2000, auditFile)).find((x) => x.aid === Number(aid));
+  if (!f) throw new ActError('这个视频不是她收藏的');
+  return send({ kind: 'unfav', payload: { aid: f.aid, folderId: f.folderId, folder: f.folder }, preview: `取消收藏《${clip(f.title, 30)}》`, target: { oid: String(f.aid), bvid: f.bvid, title: f.title, why: '主人在设置页取消' } }, { cfg, client, now, auditFile, draftsFile, how: 'ui' });
 }
 
 /** 她关注的人：审计里关注成功、之后没取关的。[{mid, name, at, why}]，新的在前。 */

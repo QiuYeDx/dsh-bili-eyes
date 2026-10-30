@@ -18,7 +18,7 @@ import { loadTrails } from './surf-agent.js';
 import { loadAuto, ensurePlan, autoSurfNow } from './auto-surf.js';
 import { loadInbox, saveInbox, markItems } from './inbox.js';
 import { pollInbox, ownerName, writeClient } from './interact.js';
-import { loadDrafts, readAudit, todayCounts, confirm, deleteSent, deletedIds, visibleIds, recheckHidden, ownFollows, ownerUnfollow, recheckFollows, KIND_TEXT, ActError, sleep } from './act.js';
+import { loadDrafts, readAudit, todayCounts, confirm, deleteSent, deletedIds, visibleIds, recheckHidden, ownFollows, ownerUnfollow, recheckFollows, ownFavs, ownerUnfav, KIND_TEXT, ActError, sleep } from './act.js';
 import { sessionContext, gateKind, hello, recentJudgments } from './gate.js';
 import { ALL_TOOLS } from './tool-list.js';
 import { checkBridge } from './adapters/dsh-qq.js';
@@ -208,7 +208,9 @@ async function getView(view, ctx) {
       owner: { mid: cfg.ownerMid, name: owner },
       modes: { like: cfg.likeMode, comment: cfg.commentMode, dm: cfg.dmMode, post: cfg.postMode, follow: cfg.followMode },
       counts: todayCounts(entries),
-      quota: { like: cfg.likePerDay, comment: cfg.commentPerDay, reply: cfg.replyPerDay, dm: cfg.dmPerDay, post: cfg.postPerDay, follow: cfg.followPerDay },
+      quota: { like: cfg.likePerDay, fav: cfg.favPerDay, comment: cfg.commentPerDay, reply: cfg.replyPerDay, dm: cfg.dmPerDay, post: cfg.postPerDay, follow: cfg.followPerDay },
+      favs: ownFavs(readAudit(2000)),
+      favFolder: cfg.favFolder || '默认收藏夹',
       follows: ownFollows(readAudit(2000)),
       followTag: cfg.followTag || DEFAULTS.followTag,
       followPausedUntil: drafts.followPausedUntil > Date.now() ? drafts.followPausedUntil : 0,
@@ -351,6 +353,7 @@ async function postAction(body, ctx) {
     }
     case 'recheck': return recheckHidden({ client: await writeClient(cfg) });
     case 'unfollow': return ownerUnfollow(Number(body.mid), { cfg, client: await writeClient(cfg) });
+    case 'unfav': return ownerUnfav(Number(body.aid), { cfg, client: await writeClient(cfg) });
     case 'undoTodayFollows': {
       const client = await writeClient(cfg);
       const today = new Date().toDateString();

@@ -1,5 +1,5 @@
 // B站接口：视频信息、标签、评论、弹幕、字幕、AI 总结、登录状态、推荐与动态、收件箱，
-// 以及少数写操作（点赞、收藏、评论、删评论、私信、纯文字动态）。
+// 以及少数写操作（点赞、收藏 / 取消收藏、评论、删评论、私信、纯文字动态、关注 / 取关）。
 // 写操作只在这里发请求；要不要发、发给谁、发几条由 act.js 决定。不实现投币、拉黑、改资料、上传。
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
@@ -392,6 +392,38 @@ export class BiliClient {
 
   favVideo(aid, folderId) {
     return this.request('https://api.bilibili.com/x/v3/fav/resource/deal', { method: 'POST', form: { rid: aid, type: 2, add_media_ids: folderId, del_media_ids: '', csrf: this.csrf() } });
+  }
+
+  /** 从某个收藏夹里移出。 */
+  unfavVideo(aid, folderId) {
+    return this.request('https://api.bilibili.com/x/v3/fav/resource/deal', { method: 'POST', form: { rid: aid, type: 2, add_media_ids: '', del_media_ids: folderId, csrf: this.csrf() } });
+  }
+
+  /** 这个账号建的收藏夹：[{id, title, count}]。 */
+  async favFolders() {
+    const d = await this.request(`https://api.bilibili.com/x/v3/fav/folder/created/list-all?type=2&up_mid=${Number(this.cookies.DedeUserID)}`);
+    return (d?.list ?? []).map((f) => ({ id: Number(f.id), title: String(f.title ?? ''), count: Number(f.media_count) || 0 }));
+  }
+
+  /** 建一个公开的收藏夹，返回 id。 */
+  async createFavFolder(title) {
+    const d = await this.request('https://api.bilibili.com/x/v3/fav/folder/add', { method: 'POST', form: { title, intro: '', privacy: 0, cover: '', csrf: this.csrf() } });
+    return Number(d?.id);
+  }
+
+  /** 收藏夹里的视频（新收藏的在前）：[{bvid, aid, title, author, mid, seconds, play, favAt}]。 */
+  async favFolderVideos(folderId, n = 20) {
+    const d = await this.request(`https://api.bilibili.com/x/v3/fav/resource/list?media_id=${Number(folderId)}&pn=1&ps=${Math.min(20, Math.max(1, n))}&order=mtime&type=0&tid=0&platform=web`);
+    return (d?.medias ?? []).filter((m) => m.type === 2 && m.bvid).map((m) => ({
+      bvid: m.bvid, aid: Number(m.id), title: stripHtml(m.title), author: m.upper?.name ?? '', mid: Number(m.upper?.mid) || 0,
+      seconds: Number(m.duration) || 0, play: Number(m.cnt_info?.play) || 0, danmaku: Number(m.cnt_info?.danmaku) || 0, pubdate: Number(m.pubtime) || 0, favAt: (Number(m.fav_time) || 0) * 1000, desc: '',
+    }));
+  }
+
+  /** 我和这个视频的关系：{like, favorite, coin, attention}（要登录）。 */
+  async archiveRelation(aid) {
+    const d = await this.request(`https://api.bilibili.com/x/web-interface/archive/relation?aid=${Number(aid)}`);
+    return { like: d?.like === true, favorite: d?.favorite === true, coin: Number(d?.coin) || 0, attention: d?.attention === true };
   }
 
   /** 发评论；给 root（和 parent）就是楼中楼。atNameToMid: {昵称: mid}，让正文里的「@昵称」变成真的 @。 */

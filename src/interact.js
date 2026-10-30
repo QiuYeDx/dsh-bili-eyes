@@ -2,7 +2,7 @@
 import { loadConfig, DEFAULTS } from './config.js';
 import { loadCredential } from './credential.js';
 import { InputError, makeClient, resolveVideo, clip } from './look.js';
-import { request, confirm, checkText, loadDrafts, readAudit, ownFollows, ActError } from './act.js';
+import { request, confirm, checkText, loadDrafts, readAudit, ownFollows, ownFavs, ActError } from './act.js';
 import { resolveUp } from './feed.js';
 import { watchedUp } from './seen-ups.js';
 import { parseInput } from './url.js';
@@ -53,10 +53,39 @@ async function afterSent(r, inboxId) {
 }
 
 export async function likeTool(args, exec, { cfg = loadConfig() } = {}) {
+  if (args.fav) return favTool({ url: args.url, like: true }, exec, { cfg });   // 老写法：点赞 + 收藏
   const client = await writeClient(cfg);
   const { v, url } = await resolveVideo(args.url, client);
-  const kind = args.fav ? 'fav' : 'like';
-  return request({ kind, payload: { aid: v.aid }, preview: `《${clip(v.title, 40)}》`, target: { bvid: v.bvid, title: v.title, oid: String(v.aid), url } }, opts(cfg, client, exec));
+  return request({ kind: 'like', payload: { aid: v.aid }, preview: `点赞《${clip(v.title, 40)}》`, target: { bvid: v.bvid, title: v.title, oid: String(v.aid), url } }, opts(cfg, client, exec));
+}
+
+/**
+ * 收藏 / 取消收藏。收藏放进设置里的收藏夹（favFolder）；取消只能取消她自己收藏的（审计记录，或者在她的收藏夹里）。
+ * like=true 时收藏前先点赞。
+ */
+export async function favTool(args, exec, { cfg = loadConfig() } = {}) {
+  const kind = args.action === 'remove' ? 'unfav' : 'fav';
+  const client = await writeClient(cfg);
+  const { v, url } = await resolveVideo(args.url, client);
+  const why = clip(String(args.why ?? '').replace(/\s+/g, ' ').trim(), 60);
+  const rel = await client.archiveRelation(v.aid).catch(() => null);
+  if (kind === 'fav' && rel?.favorite && (!args.like || rel.like)) return { status: 'refused', text: `《${clip(v.title, 30)}》已经收藏过了${args.like ? '，也赞过了' : ''}` };
+  if (kind === 'unfav' && rel && !rel.favorite) return { status: 'refused', text: `《${clip(v.title, 30)}》本来就没收藏` };
+  let own = false; let folderId = ''; let folder = '';
+  if (kind === 'unfav') {
+    const f = ownFavs(readAudit(2000)).find((x) => x.aid === Number(v.aid));
+    if (f) { own = true; folderId = f.folderId; folder = f.folder; }
+    else if (cfg.favFolder) {
+      // 审计只留最近的记录：再看她的收藏夹里有没有
+      try {
+        const fo = (await client.favFolders()).find((x) => x.title === cfg.favFolder);
+        if (fo && (await client.favFolderVideos(fo.id, 20)).some((x) => x.aid === Number(v.aid))) { own = true; folderId = String(fo.id); folder = fo.title; }
+      } catch { /* 查不到就按不是她收藏的处理 */ }
+    }
+  }
+  const payload = kind === 'fav' ? { aid: v.aid, ...(args.like ? { like: true } : {}) } : { aid: v.aid, folderId, folder };
+  const preview = `${kind === 'fav' ? (args.like ? '点赞并收藏' : '收藏') : '取消收藏'}《${clip(v.title, 40)}》${why ? `：${why}` : ''}`;
+  return request({ kind, payload, preview, target: { bvid: v.bvid, title: v.title, oid: String(v.aid), url, why }, own }, opts(cfg, client, exec));
 }
 
 export async function commentTool(args, exec, { cfg = loadConfig() } = {}) {

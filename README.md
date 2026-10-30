@@ -21,11 +21,12 @@ DeepSeek Harness（DSH）插件：模型拿到一个 B站链接，就能真的�
 | `bili_look` | `url`（链接、b23 短链、BV 号或含链接的分享文字），可选 `from` / `to`（秒）、`detail`（`low` / `med`） | 看整个视频（2 小时以内看完整；更长的默认看开头 2 小时） |
 | `bili_look_zoom` | `url`、`from`、`to`（最多 60 秒），可选 `cells`（1~9） | 放大看某几秒：格子少、每格大，尽量从高清流取帧 |
 | `bili_find` | `query`（关键词），可选 `order`（`relevance` / `views` / `newest` / `danmaku` / `favorites`）、`duration`（`any` / `short` / `medium` / `long` / `xlong`）、`limit`（1~10） | B站站内搜视频：标题、UP、时长、播放、弹幕、日期、链接、简介 |
-| `bili_feed` | `source`（`recommend` / `hot` / `rank` / `following` / `up`），可选 `up`（UID 或昵称）、`limit` | 刷列表：首页推荐、热门、排行、关注动态、UP 主投稿 |
+| `bili_feed` | `source`（`recommend` / `hot` / `rank` / `following` / `up` / `favorites`），可选 `up`（UID 或昵称）、`limit` | 刷列表：首页推荐、热门、排行、关注动态、UP 主投稿、她的收藏 |
 | `bili_comments` | `url`，可选 `rpid`、`sort`（`hot` / `new`）、`limit` | 评论区或某条评论的楼中楼；每条带 `#rpid` |
 | `bili_surf` | 可选 `direction`（方向关键词）、`picks`、`mode`（`explore` / `quick`） | 逛一圈。`explore`（默认）：模型用插件内的只读函数顺着点（有步数、视频数、时间、token 上限），交回挑中的几条和路线；`quick`：找候选 → 挑 → 快速看 → 总结 |
 | `bili_inbox` | 可选 `action`（`list` / `done` / `ignore`）、`ids` | 收件箱里待处理的消息；标记处理完 / 忽略 |
-| `bili_like` | `url`，可选 `fav` | 点赞（可同时收进默认收藏夹） |
+| `bili_like` | `url`，可选 `fav`（旧写法，等同 `bili_fav` 加 `like`） | 点赞 |
+| `bili_fav` | `url`，可选 `action`（`add` / `remove`）、`like`、`why` | 收藏到她自己的收藏夹（可顺便点赞），或取消她自己收藏的 |
 | `bili_comment` | `text`，加 `url`（顶层评论）/ `url`+`rpid`（楼中楼）/ `inbox`（回复收件箱那条），可选 `mention`（@ 主人） | 评论、回复 |
 | `bili_dm` | `text` | 私信主人（收件人只能是设置里的主人 UID） |
 | `bili_post` | `text` | 发纯文字动态 |
@@ -68,6 +69,14 @@ DeepSeek Harness（DSH）插件：模型拿到一个 B站链接，就能真的�
    - **门卫转达**：比如看门狗叫醒她，在 QQ 私聊里用自己的口吻告诉你。没接门卫就跳过这一种。
 
 每次的结果（逛到了什么、评论了什么、推荐给谁、每种方式成没成）都显示在「自己逛」卡片里，也能手动「现在逛一次」。
+
+### 收藏
+
+- `bili_fav` 把视频放进她自己的收藏夹（设置里的 `favFolder`，默认「AI 的收藏」，第一次用时建一个公开的；留空就用账号的默认收藏夹），这样她收藏的和账号里原来的分得开。`like=true` 时先点赞。
+- 发完隔 1.5 / 3 / 6 秒查一次这个视频和账号的关系，确认真的收藏上了（点了赞的也确认赞上了）；查不到就照实说，别说「收藏好了」。
+- 取消收藏只能取消**她自己收藏的**（审计里有记录，或者在她的收藏夹里），并且只从当初放进去的那个收藏夹移出。
+- 档位和点赞共用「点赞、收藏」一项；额度单独算（每天 `favPerDay` 个）。
+- `bili_feed` 的 `favorites` 能看她收藏夹里有什么；设置页「互动 → 她的收藏」能一键取消。
 
 ### 关注
 
@@ -227,6 +236,7 @@ DSH「设置」侧边栏里多出「B站看视频」（0.4.0 起），六个页�
 | `likeMode` / `commentMode` / `dmMode` / `postMode` / `followMode` | `off` | `off` 关 / `approve` 先问主人 / `auto` 直接发（会话可信时；关注只对最近看过的 UP 主，取关永远先问） |
 | `likePerDay` / `commentPerDay` / `replyPerDay` / `dmPerDay` / `postPerDay` / `followPerDay` | 30 / 5 / 10 / 10 / 2 / 3 | 每天上限（关注硬上限 10） |
 | `followTag` | `AI 的关注` | 她关注的人放进 B站的哪个分组（没有就建），也是她能取关的范围；改名后旧分组里的人不会自动搬过来 |
+| `favFolder` / `favPerDay` | `AI 的收藏` / 10 | 她收藏的视频放进哪个收藏夹（没有就建一个公开的；留空 = 默认收藏夹），也是她能取消收藏的范围；收藏和取消收藏各自每天几个（和点赞共用「点赞、收藏」这一档） |
 | `writeGapSeconds` / `draftMinutes` / `writePaused` | 60 / 60 / false | 两次写操作至少隔多久、草稿有效期、全部停下 |
 | `gateMode` / `qqBridgeDir` | `auto` / — | 门卫来源：`auto`（桥接服务 > 门卫地址 > 内置）、`dsh-qq`（插件自己当 dsh-qq 桥接的门卫，要填桥接目录）、`builtin` |
 | `gateUrl` / `gateHeader` | — | 门卫地址（只能是本机 `http://127.0.0.1…`）和请求头（`名字: 值`） |
