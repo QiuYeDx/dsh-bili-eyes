@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Bili Eyes",
-    "description": "Let the model watch Bilibili videos (storyboards, captions, hot comments, danmaku), search, browse feeds and comment sections, and check the inbox. Likes, comments, DMs and posts are off by default and can be enabled per type (off / ask the owner / auto) with daily caps and an audit log."
+    "title": "Bili Buddy",
+    "description": "Let the model watch Bilibili videos (storyboards, captions, hot comments, danmaku), search, browse on its own, surf on a schedule, and check the inbox. Likes, comments, favorites, DMs, posts and follows are off by default and can be enabled per type (off / ask the owner / auto) with daily caps and an audit log."
   }
 }

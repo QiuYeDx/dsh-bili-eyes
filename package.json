@@ -1,7 +1,7 @@
 {
   "name": "dsh-bili-eyes",
   "version": "0.6.0",
-  "description": "DeepSeek Harness 插件：让模型「看」B站视频（分镜图 + 台词 + 热评 + 弹幕热词）、搜视频、顺着线索逛 B站、看收件箱；点赞、评论、私信、动态、关注默认关闭，可按档位和额度开启并由主人同意。装上就能用：自己下载视频，ffmpeg 可一键下载。DSH 设置里带管理界面。",
+  "description": "DeepSeek Harness 插件：让模型「看」B站视频（分镜图 + 台词 + 热评 + 弹幕热词）、搜视频、顺着线索逛 B站、看收件箱；点赞、评论、收藏、私信、动态、关注默认关闭，可按档位和额度开启并由主人同意。装上就能用：自己下载视频，ffmpeg 可一键下载。DSH 设置里带管理界面。",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -13,6 +13,14 @@
   ],
   "license": "MIT",
   "author": "QiuYeDx",
+  "homepage": "https://github.com/QiuYeDx/dsh-bili-eyes#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/QiuYeDx/dsh-bili-eyes.git"
+  },
+  "bugs": {
+    "url": "https://github.com/QiuYeDx/dsh-bili-eyes/issues"
+  },
   "type": "module",
   "main": "./src/index.js",
   "exports": {
@@ -26,7 +34,7 @@
     "./gate": "./src/gate.js"
   },
   "bin": {
-    "dsh-bili-eyes": "./bin/cli.mjs"
+    "dsh-bili-eyes": "bin/cli.mjs"
   },
   "files": [
     "src",
