@@ -130,15 +130,21 @@ export function itemLine(x) {
   if (x.kind === 'dm') return `[${x.id}] 私信 · ${who}：${x.text}`;
   const where = x.where.title ? `在《${x.where.title}》` : '';
   const mine = x.mine ? `（我说的是：${x.mine}）` : '';
-  return `[${x.id}] ${KIND_TEXT[x.kind]} · ${who}${where}${x.kind === 'reply' ? '回复了我' : '@ 了我'}${mine}：${x.text}`;
+  // 带上视频链接：叫醒她时她能直接打开看，不用按标题去搜（搜到的可能不是这个）
+  const link = x.where.uri ? `（视频：${x.where.uri}）` : '';
+  return `[${x.id}] ${KIND_TEXT[x.kind]} · ${who}${where}${x.kind === 'reply' ? '回复了我' : '@ 了我'}${mine}：${x.text}${link}`;
 }
 
 export function notifyText(items, now = Date.now()) {
   return [`B站小号刚收到 ${items.length} 条新消息（${new Date(now).toTimeString().slice(0, 5)}，是新消息，不是过期提醒）：`, ...items.map(itemLine), '（用 bili_inbox 看详情；要回复评论用 bili_comment 并带上 inbox 编号，回完用 bili_inbox 标记处理完）'].join('\n');
 }
 
-/** 这条要不要用老办法（叫醒她自己处理）：私信总是；评论只在「叫醒她自己处理」档位下。 */
-export const byWake = (x, cfg) => x.kind === 'dm' || cfg.inboxReplyMode === 'wake' || !x.target || x.target.oid === '0';
+/**
+ * 这条要不要用老办法（叫醒她自己处理）：私信总是；主人的回复和 @ 也总是（主人是在找她，
+ * 要她看了视频自己回，评论引擎会把主人的评论当成「不用回」跳过）；别人的评论只在「叫醒她自己处理」档位下。
+ */
+export const isOwnerItem = (x, cfg) => Boolean(x.owner) || (cfg.ownerMid > 0 && Number(x.user?.mid) === Number(cfg.ownerMid));
+export const byWake = (x, cfg) => x.kind === 'dm' || isOwnerItem(x, cfg) || cfg.inboxReplyMode === 'wake' || !x.target || x.target.oid === '0';
 
 /** 把还没转达的交给门卫；按每小时上限节流。返回转达了几条。 */
 export async function deliver(state, cfg, { now = Date.now(), notifyImpl = notify } = {}) {

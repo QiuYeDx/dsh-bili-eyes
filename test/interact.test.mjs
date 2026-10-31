@@ -242,6 +242,7 @@ test('收件箱：转达按每小时上限节流，门卫失败不标记', async
   st.items.push(feedItem('reply', replyIt(3)));
   assert.equal(await deliver(st, cfg, { notifyImpl: async () => true }), 0, '这一小时已经转达过一次');
   assert.match(notifyText([st.items[1]]), /@ 了我/);
+  assert.match(notifyText([st.items[1]]), /（视频：https:\/\/www\.bilibili\.com\/video\//, '带上视频链接，她不用按标题去搜');
 });
 
 test('安静时段：可跨午夜', () => {

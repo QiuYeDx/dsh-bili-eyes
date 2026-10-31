@@ -12,7 +12,7 @@ const { parseVerdicts, plan, fitLength, processBatch, reportLines, sendReport, l
 const { videoList, togglePatch, bvList } = await import('../src/guard.js');
 const { pollInbox, engineItem } = await import('../src/interact.js');
 const { saveCredential } = await import('../src/credential.js');
-const { loadInbox, saveInbox, feedItem } = await import('../src/inbox.js');
+const { loadInbox, saveInbox, feedItem, byWake } = await import('../src/inbox.js');
 const { request: realRequest, readAudit } = await import('../src/act.js');
 
 const cfgOf = (o = {}) => ({ ...DEFAULTS, ownerMid: 42, ...o });
@@ -258,4 +258,13 @@ test('收件箱条目 → 引擎条目：回复要的参数都带上', () => {
   assert.equal(e.oid, '100');
   assert.equal(e.mine, '她之前说的话');
   assert.equal(e.source, 'inbox');
+});
+
+test('主人的回复和 @ 不进评论引擎，叫醒她自己处理（引擎会把主人的评论当成不用回）', () => {
+  const cfg = cfgOf({ inboxReplyMode: 'auto', ownerMid: 500 });
+  const own = feedItem('at', replyIt(4, '@她 看看这个'), 500);
+  assert.equal(own.owner, true);
+  assert.equal(byWake(own, cfg), true);
+  assert.equal(byWake({ ...own, owner: false }, cfg), true, '没有 owner 标记也按 UID 认');
+  assert.equal(byWake(feedItem('reply', replyIt(5), 42), { ...cfg, ownerMid: 77 }), false, '别人的评论照旧交给引擎');
 });
