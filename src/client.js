@@ -10,7 +10,7 @@ window.__ModuleLoader__.load({
     const React = require('react');
     let Prim = {};
     try { Prim = require('@deepseek-ai/dsh-client-ui-primitives'); } catch { /* 没有就用原生按钮 */ }
-    const { useState, useEffect, useCallback, useRef } = React;
+    const { useState, useEffect, useCallback, useRef, useContext, createContext } = React;
     const h = React.createElement;
 
     // ── 样式（DSH 主题变量，带浅色兜底；深浅色跟着 DSH 走）──────────────────────
@@ -19,15 +19,26 @@ window.__ModuleLoader__.load({
 --b1:var(--dsw-alias-bg-layer-1,#fff);--b2:var(--dsw-alias-bg-layer-2,#f6f8fa);--bd:var(--dsw-alias-border-l2,#d0d7de);
 --brand:var(--dsw-alias-brand-primary,#4d6bfe);--ok:var(--dsw-alias-state-success-primary,#1a7f37);
 --bad:var(--dsw-alias-state-danger,#d1242f);--pink:#fb7299;--r:var(--dsw-radius-lg,12px);--rs:var(--dsw-radius-md,8px);
+--be-page:var(--dsw-alias-bg-base,var(--b2));--be-nav-h:40px;
 color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:column;gap:16px;max-width:920px;padding-bottom:24px}
 .be-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
 .be-head h2{margin:0;font-size:20px;font-weight:600;letter-spacing:.2px}
 .be-head p{margin:4px 0 0;color:var(--t2);font-size:13px;flex-basis:100%}
-.be-tabs{display:flex;gap:4px;border-bottom:1px solid var(--bd);overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
+.be-tabs{position:sticky;top:0;z-index:6;display:flex;gap:4px;height:var(--be-nav-h);box-sizing:border-box;background:var(--be-page);box-shadow:inset 0 -1px 0 var(--bd);overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
 .be-tabs::-webkit-scrollbar{display:none}
-.be-tab{appearance:none;border:0;background:none;color:var(--t2);padding:8px 14px;font:inherit;font-size:14px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
+.be-tab{appearance:none;border:0;background:none;color:var(--t2);padding:0 12px;font:inherit;font-size:14px;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;transition:color .15s,border-color .15s}
 .be-tab:hover{color:var(--t1)}
 .be-tab[aria-selected=true]{color:var(--t1);border-bottom-color:var(--brand);font-weight:600}
+.be-subbar{position:sticky;top:var(--be-nav-h);z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin:-16px 0;padding:12px 0;background:var(--be-page)}
+.be-subbar::after{content:"";position:absolute;left:0;right:0;top:100%;height:10px;background:linear-gradient(var(--be-page),transparent);pointer-events:none;opacity:0;transition:opacity .15s}
+.be-subbar.under::after{opacity:1}
+.be-jump{margin-left:auto;flex:none;display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--t3)}
+.be-jump select{appearance:none;-webkit-appearance:none;font:inherit;font-size:13px;color:var(--t1);height:30px;max-width:168px;padding:0 26px 0 10px;border-radius:var(--rs);border:1px solid var(--bd);cursor:pointer;
+background:var(--b1) no-repeat right 9px center/9px 6px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 9 6'%3E%3Cpath d='M1 1l3.5 3.5L8 1' fill='none' stroke='%238b949e' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")}
+.be-jump select:hover{border-color:color-mix(in srgb,var(--t3) 60%,var(--bd))}
+.be-jump select:focus-visible{outline:2px solid color-mix(in srgb,var(--brand) 45%,transparent);outline-offset:1px}
+.be-jump option{background:var(--b1);color:var(--t1)}
+.be .be-card{scroll-margin-top:calc(var(--be-nav-h) + 70px)}
 .be-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
 .be-card{background:var(--b1);border:1px solid var(--bd);border-radius:var(--r);padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
 .be-card-h{display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap}
@@ -96,10 +107,12 @@ a.be-et:hover{color:var(--brand)}
 .be-sube{display:flex;flex-direction:column;gap:2px}
 .be-1l{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .be-sube .be-eh{font-size:12.5px}
-.be-seg{display:inline-flex;border:1px solid var(--bd);border-radius:var(--rs);overflow:hidden;align-self:flex-start}
-.be-seg button{appearance:none;border:0;background:var(--b1);color:var(--t2);font:inherit;font-size:13px;padding:6px 14px;cursor:pointer}
-.be-seg button+button{border-left:1px solid var(--bd)}
-.be-seg button[aria-pressed=true]{background:color-mix(in srgb,var(--brand) 10%,var(--b1));color:var(--brand);font-weight:600}
+.be-seg{display:inline-flex;gap:2px;padding:3px;border-radius:10px;background:color-mix(in srgb,var(--t1) 6%,transparent);align-self:flex-start;max-width:100%;overflow-x:auto;scrollbar-width:none}
+.be-seg::-webkit-scrollbar{display:none}
+.be-seg button{appearance:none;border:0;background:none;color:var(--t2);font:inherit;font-size:13px;height:28px;padding:0 14px;border-radius:7px;cursor:pointer;white-space:nowrap;flex:none;transition:color .15s,background-color .15s,box-shadow .15s}
+.be-seg button:hover{color:var(--t1);background:color-mix(in srgb,var(--t1) 5%,transparent)}
+.be-seg button[aria-pressed=true]{background:color-mix(in srgb,var(--brand) 14%,var(--b1));color:var(--brand);box-shadow:0 0 0 1px color-mix(in srgb,var(--brand) 22%,transparent)}
+.be-seg button:focus-visible{outline:2px solid color-mix(in srgb,var(--brand) 55%,transparent);outline-offset:1px}
 .be-field{display:flex;flex-direction:column;gap:4px;min-width:0}
 .be-field>label{font-size:13px;color:var(--t2)}
 .be-field small{color:var(--t3);font-size:12px}
@@ -204,16 +217,18 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
 .be-ok{color:var(--ok);font-size:13px}.be-no{color:var(--bad);font-size:13px}
 .be-page{display:flex;flex-direction:column;gap:16px;min-width:0}
 .be-page[hidden]{display:none}
-.be-sub{display:flex;gap:4px;flex-wrap:wrap}
-.be-sub button{appearance:none;border:0;background:none;font:inherit;font-size:13px;color:var(--t2);padding:5px 12px;border-radius:999px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
-.be-sub button:hover{background:var(--b2);color:var(--t1)}
-.be-sub button[aria-current=page]{background:color-mix(in srgb,var(--brand) 12%,transparent);color:var(--brand);font-weight:600}
+.be-sub{display:inline-flex;gap:2px;padding:3px;border-radius:10px;background:color-mix(in srgb,var(--t1) 6%,transparent);min-width:0;max-width:100%;overflow-x:auto;scrollbar-width:none}
+.be-sub::-webkit-scrollbar{display:none}
+.be-sub button{appearance:none;border:0;background:none;font:inherit;font-size:13px;color:var(--t2);height:28px;padding:0 12px;border-radius:7px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;flex:none;transition:color .15s,background-color .15s,box-shadow .15s}
+.be-sub button:hover{color:var(--t1);background:color-mix(in srgb,var(--t1) 5%,transparent)}
+.be-sub button[aria-current=page]{background:color-mix(in srgb,var(--brand) 14%,var(--b1));color:var(--brand);box-shadow:0 0 0 1px color-mix(in srgb,var(--brand) 22%,transparent)}
 .be-sub button:focus-visible,.be-tab:focus-visible,.be-link:focus-visible{outline:2px solid color-mix(in srgb,var(--brand) 55%,transparent);outline-offset:1px}
 .be-n{min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:999px;background:var(--brand);color:#fff;font-size:11px;font-weight:600;line-height:18px;text-align:center;font-variant-numeric:tabular-nums}
 .be-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .be-tools .sp{flex:1 1 0}
 .be-select.sm{width:auto;font-size:13px;padding:4px 8px}
-.be-seg.sm button{padding:4px 10px;font-size:12.5px}
+.be-seg.sm{padding:2px;border-radius:8px}
+.be-seg.sm button{height:24px;padding:0 10px;font-size:12.5px;border-radius:6px}
 .be-scroll{max-height:min(520px,58vh);overflow:auto;overscroll-behavior:contain;margin:0 -16px;padding:0 16px;border-top:1px solid color-mix(in srgb,var(--bd) 60%,transparent);border-bottom:1px solid color-mix(in srgb,var(--bd) 60%,transparent)}
 .be-foot{display:flex;justify-content:space-between;align-items:center;gap:8px;color:var(--t3);font-size:12px;min-height:28px}
 .be-todo{display:grid;grid-template-columns:1fr auto auto;gap:4px 10px;align-items:center;font-size:13px}
@@ -403,15 +418,68 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
     function SubNav({ items, value, onChange }) {
       return h('nav', { className: 'be-sub', 'aria-label': '分区' }, items.map(([id, label, n]) => h('button', { key: id, type: 'button', 'aria-current': value === id ? 'page' : undefined, onClick: () => onChange(id) }, label, n ? h('span', { className: 'be-n' }, n > 99 ? '99+' : n) : null)));
     }
+    // 子页面里有好几组设置时，把分组报给导航条，导航条右边出「跳到」
+    const GroupsCtx = createContext(null);
+
+    // 「跳到」：选了就滚到那一组；滚动时跟着显示现在看到的是哪一组
+    function JumpTo({ groups, active, barRef }) {
+      const [cur, setCur] = useState(groups[0][0]);
+      useEffect(() => {
+        if (!active) return undefined;
+        let raf = 0;
+        const spy = () => {
+          cancelAnimationFrame(raf);
+          raf = requestAnimationFrame(() => {
+            const line = (barRef.current?.getBoundingClientRect().bottom ?? 0) + 24;
+            let hit = groups[0][0];
+            for (const [g] of groups) { const el = document.getElementById(`be-g-${g}`); if (el && el.getBoundingClientRect().top <= line) hit = g; }
+            setCur(hit);
+          });
+        };
+        spy();
+        document.addEventListener('scroll', spy, true);
+        window.addEventListener('resize', spy);
+        return () => { cancelAnimationFrame(raf); document.removeEventListener('scroll', spy, true); window.removeEventListener('resize', spy); };
+      }, [active, groups.map((g) => g[0]).join()]);
+      const go = (g) => { setCur(g); document.getElementById(`be-g-${g}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+      return h('label', { className: 'be-jump' }, '跳到',
+        h('select', { value: cur, onChange: (e) => go(e.target.value), 'aria-label': '跳到这一页的设置分组' }, groups.map(([g, l]) => h('option', { key: g, value: g }, l))));
+    }
+
     // 子页面：去过的留着（隐藏），跑到一半的试看、逛一圈切走再回来，结果还在
     function SubPages({ items, sub, setSub, active, props }) {
       const ids = items.map((x) => x[0]);
       const cur = ids.includes(sub) ? sub : ids[0];
       const [seen, setSeen] = useState(() => new Set([cur]));
       useEffect(() => { if (!seen.has(cur)) setSeen(new Set([...seen, cur])); }, [cur]);
+      const [toc, setToc] = useState({});   // 子页面 → [[分组, 标题]]
+      const regs = useRef({});
+      const regFor = (id) => { if (!regs.current[id]) regs.current[id] = (list) => setToc((t) => ({ ...t, [id]: list })); return regs.current[id]; };
+      const barRef = useRef(null);
+      // 内容滚到导航条底下时才显示下沿的渐隐；没滚动时它会压在卡片上沿
+      const [under, setUnder] = useState(false);
+      useEffect(() => {
+        if (!active) return undefined;
+        let raf = 0;
+        const check = () => {
+          cancelAnimationFrame(raf);
+          raf = requestAnimationFrame(() => {
+            const bar = barRef.current;
+            const page = bar && [...bar.parentElement.children].find((c) => c !== bar && !c.hidden);
+            setUnder(Boolean(page) && page.getBoundingClientRect().top < bar.getBoundingClientRect().bottom - 1);
+          });
+        };
+        check();
+        document.addEventListener('scroll', check, true);
+        window.addEventListener('resize', check);
+        return () => { cancelAnimationFrame(raf); document.removeEventListener('scroll', check, true); window.removeEventListener('resize', check); };
+      }, [active, cur]);
       return h(React.Fragment, null,
-        h(SubNav, { items: items.map(([id, label, , n]) => [id, label, n]), value: cur, onChange: setSub }),
-        items.map(([id, , Comp]) => (seen.has(id) || id === cur) && h('div', { key: id, className: 'be-page', hidden: id !== cur }, h(Comp, { ...props, active: active && id === cur }))));
+        h('div', { className: `be-subbar${under ? ' under' : ''}`, ref: barRef },
+          h(SubNav, { items: items.map(([id, label, , n]) => [id, label, n]), value: cur, onChange: setSub }),
+          toc[cur] && h(JumpTo, { key: cur, groups: toc[cur], active, barRef })),
+        items.map(([id, , Comp]) => (seen.has(id) || id === cur) && h('div', { key: id, className: 'be-page', hidden: id !== cur },
+          h(GroupsCtx.Provider, { value: regFor(id) }, h(Comp, { ...props, active: active && id === cur })))));
     }
 
     // ── 登录 ─────────────────────────────────────────────────────────────────
@@ -749,6 +817,9 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
     /** 几组设置项。groups: [[分组, 标题, 说明]]；actions: {分组: (保存后的配置) => 额外按钮} */
     function ConfigGroups({ groups, toast, actions = {}, footer = false, onSaved }) {
       const st = useView('config');
+      const report = useContext(GroupsCtx);
+      const toc = groups.length > 1 ? groups.map(([g, l]) => [g, l]) : null;
+      useEffect(() => { report?.(toc); return () => report?.(null); }, [report, toc && toc.map((x) => x.join(':')).join('|')]);
       const [draft, setDraft] = useState(null);
       const [saved, setSaved] = useState(null);
       useEffect(() => { if (st.data) { setDraft(st.data.config); setSaved(st.data.config); } }, [st.data]);
@@ -761,9 +832,6 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
         };
         const reset = (group) => api.post('resetConfig', { group }).then((r) => { setDraft(r.config); setSaved(r.config); toast('已恢复默认'); onSaved?.(r.config); }, (e) => toast(e.message, true));
         return h(React.Fragment, null,
-          // 好几组设置时，顶上给一排跳转，不用一路往下滚找
-          groups.length > 1 && h('nav', { className: 'be-sumline', 'aria-label': '设置分组' }, h('span', { className: 'be-faint' }, '跳到：'),
-            groups.map(([group, label]) => h('button', { key: group, type: 'button', className: 'be-link', onClick: () => document.getElementById(`be-g-${group}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, label))),
           groups.map(([group, label, desc]) => {
             const list = d.fields.filter((x) => x.group === group);
             const dirty = list.some((x) => draft[x.key] !== saved[x.key]);
@@ -1338,7 +1406,29 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
       useEffect(() => { if (!msg) return undefined; const t = setTimeout(() => setMsg(null), msg.bad ? 6000 : 2500); return () => clearTimeout(t); }, [msg]);
       useEffect(() => { try { localStorage.setItem('dsh-bili-eyes:tab', tab); localStorage.setItem('dsh-bili-eyes:subs', JSON.stringify(subs)); } catch { /* 忽略 */ } }, [tab, subs]);
       const go = useCallback((t, s) => { setTab(t); if (s) setSubs((x) => ({ ...x, [t]: s })); }, []);
-      return h('div', { className: 'be' },
+      const rootRef = useRef(null);
+      useEffect(() => {
+        const el = rootRef.current;
+        if (!el) return undefined;
+        const opaque = (c) => /^rgb\(/.test(c) || (/^rgba\(/.test(c) && Number(c.split(',')[3]?.replace(')', '')) >= 1) || (/^color\(/.test(c) && !c.includes('/'));
+        const paint = () => {
+          for (let n = el.parentElement; n; n = n.parentElement) {
+            const c = getComputedStyle(n).backgroundColor;
+            if (opaque(c)) { el.style.setProperty('--be-page', c); return; }
+          }
+          el.style.removeProperty('--be-page');
+        };
+        paint();
+        let raf = 0;
+        const later = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(paint); };
+        const mo = new MutationObserver(later);
+        mo.observe(document.documentElement, { attributes: true });
+        mo.observe(document.body, { attributes: true });
+        const mq = window.matchMedia?.('(prefers-color-scheme: dark)');
+        mq?.addEventListener?.('change', later);
+        return () => { cancelAnimationFrame(raf); mo.disconnect(); mq?.removeEventListener?.('change', later); };
+      }, []);
+      return h('div', { className: 'be', ref: rootRef },
         h('header', { className: 'be-head' }, h('h2', null, 'B站伙伴'), h(VersionBadge, { go }), h('p', null, '她的 B站：看视频、逛 B站、收件箱，以及点赞、评论、收藏、关注这些写操作（默认全关，在「互动 → 设置」里逐项打开）。这里的改动立即生效。')),
         h('nav', { className: 'be-tabs', role: 'tablist' }, TABS.map(([id, label]) => h('button', { key: id, type: 'button', role: 'tab', className: 'be-tab', 'aria-selected': tab === id, onClick: () => setTab(id) }, label))),
         // 页签都挂着、只是隐藏：试看跑到一半切走再回来，结果还在
