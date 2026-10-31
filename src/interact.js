@@ -1,5 +1,6 @@
 // 工具层：把模型给的参数（链接、rpid、收件箱编号）换成写操作要的参数，交给 act.js；收件箱轮询也在这里。
-import { loadConfig, DEFAULTS } from './config.js';
+import { loadConfig, DEFAULTS, isFriend } from './config.js';
+import { videoUp, videoAudience, replyAudience } from './audience.js';
 import { loadCredential } from './credential.js';
 import { InputError, makeClient, resolveVideo, clip } from './look.js';
 import { request, confirm, checkText, loadDrafts, readAudit, ownFollows, ownFavs, ActError } from './act.js';
@@ -11,11 +12,11 @@ import { ensureDevice } from './device.js';
 import { loadInbox, saveInbox, checkInbox, deliver, inQuiet, formatInbox, markItems, byWake } from './inbox.js';
 import { loadEngine, saveEngine, processBatch, reportLines, sendReport, engineLock } from './engine.js';
 
-// bili_comments 返回过的评论：rpid → {root, oid, user}。回复时靠它找到楼层（楼中楼的 root 不是它自己）。
+// bili_comments 返回过的评论：rpid → {root, oid, user, mid}。回复时靠它找到楼层（楼中楼的 root 不是它自己），也靠它知道回的是谁。
 const seenComments = new Map();
 export function rememberComments(oid, list) {
   for (const c of list) {
-    seenComments.set(String(c.rpid), { root: c.root && c.root !== '0' ? String(c.root) : String(c.rpid), oid: String(oid), user: c.user });
+    seenComments.set(String(c.rpid), { root: c.root && c.root !== '0' ? String(c.root) : String(c.rpid), oid: String(oid), user: c.user, mid: Number(c.mid) || 0 });
     if (seenComments.size > 2000) seenComments.delete(seenComments.keys().next().value);
   }
 }
@@ -57,7 +58,7 @@ export async function likeTool(args, exec, { cfg = loadConfig() } = {}) {
   if (args.fav) return favTool({ url: args.url, like: true }, exec, { cfg });   // 老写法：点赞 + 收藏
   const client = await writeClient(cfg);
   const { v, url } = await resolveVideo(args.url, client);
-  return request({ kind: 'like', payload: { aid: v.aid }, preview: `点赞《${clip(v.title, 40)}》`, target: { bvid: v.bvid, title: v.title, oid: String(v.aid), url } }, opts(cfg, client, exec));
+  return request({ kind: 'like', payload: { aid: v.aid }, preview: `点赞《${clip(v.title, 40)}》`, target: { bvid: v.bvid, title: v.title, oid: String(v.aid), url }, audience: videoAudience(cfg, v.owner?.mid) }, opts(cfg, client, exec));
 }
 
 /**
@@ -86,13 +87,13 @@ export async function favTool(args, exec, { cfg = loadConfig() } = {}) {
   }
   const payload = kind === 'fav' ? { aid: v.aid, ...(args.like ? { like: true } : {}) } : { aid: v.aid, folderId, folder };
   const preview = `${kind === 'fav' ? (args.like ? '点赞并收藏' : '收藏') : '取消收藏'}《${clip(v.title, 40)}》${why ? `：${why}` : ''}`;
-  return request({ kind, payload, preview, target: { bvid: v.bvid, title: v.title, oid: String(v.aid), url, why }, own }, opts(cfg, client, exec));
+  return request({ kind, payload, preview, target: { bvid: v.bvid, title: v.title, oid: String(v.aid), url, why }, own, audience: videoAudience(cfg, v.owner?.mid) }, opts(cfg, client, exec));
 }
 
 export async function commentTool(args, exec, { cfg = loadConfig() } = {}) {
   const client = await writeClient(cfg);
   const name = await ownerName(client, cfg).catch(() => '');
-  let kind = 'comment'; let target; let payload; let who = ''; let inboxId = '';
+  let kind = 'comment'; let target; let payload; let who = ''; let inboxId = ''; let audience;
   if (args.inbox) {
     inboxId = String(args.inbox).trim();
     const item = loadInbox().items.find((x) => x.id === inboxId);
@@ -102,6 +103,9 @@ export async function commentTool(args, exec, { cfg = loadConfig() } = {}) {
     kind = 'reply'; who = item.user.name;
     payload = { oid: item.target.oid, type: item.target.type, root: item.target.root, parent: item.target.parent, inbox: inboxId };
     target = { ...payload, title: item.where.title, url: item.where.uri, to: who };
+    // 收件箱里的评论多半在视频下（type 1）；动态下的评论不知道是谁的地盘
+    const upMid = Number(item.target.type) === 1 ? (await videoUp(client, item.target.oid)) || null : null;
+    audience = replyAudience(cfg, { mid: item.user?.mid, upMid });
   } else {
     const { v, url } = await resolveVideo(args.url, client);
     const rpid = String(args.rpid ?? '').replace(/^#/, '').trim();
@@ -110,13 +114,17 @@ export async function commentTool(args, exec, { cfg = loadConfig() } = {}) {
       const known = seenComments.get(rpid);
       kind = 'reply'; who = known?.user ?? '';
       payload = { oid: String(v.aid), type: 1, root: known && known.oid === String(v.aid) ? known.root : rpid, parent: rpid };
-    } else payload = { oid: String(v.aid), type: 1, root: '0', parent: '0' };
+      audience = replyAudience(cfg, { mid: known && known.oid === String(v.aid) ? known.mid : 0, upMid: Number(v.owner?.mid) || null });
+    } else {
+      payload = { oid: String(v.aid), type: 1, root: '0', parent: '0' };
+      audience = videoAudience(cfg, v.owner?.mid);
+    }
     target = { ...payload, bvid: v.bvid, title: v.title, url, to: who };
   }
   try { payload.text = checkText(kind, args.text, { ownerName: name, mention: Boolean(args.mention) }); } catch (e) { if (e instanceof ActError) return { status: 'refused', text: `没发：${e.message}` }; throw e; }
   if (name && payload.text.includes(`@${name}`)) payload.atNameToMid = { [name]: cfg.ownerMid };
   const preview = `${kind === 'reply' ? `回复${who ? ` ${who}` : ''}` : `在《${clip(target.title, 30)}》下评论`}：${clip(payload.text, 60)}`;
-  return afterSent(await request({ kind, payload, preview, target }, opts(cfg, client, exec)), inboxId);
+  return afterSent(await request({ kind, payload, preview, target, audience }, opts(cfg, client, exec)), inboxId);
 }
 
 export async function dmTool(args, exec, { cfg = loadConfig() } = {}) {
@@ -124,7 +132,7 @@ export async function dmTool(args, exec, { cfg = loadConfig() } = {}) {
   const client = await writeClient(cfg);
   let text;
   try { text = checkText('dm', args.text, { ownerName: await ownerName(client, cfg).catch(() => '') }); } catch (e) { if (e instanceof ActError) return { status: 'refused', text: `没发：${e.message}` }; throw e; }
-  return request({ kind: 'dm', payload: { to: cfg.ownerMid, text }, preview: `私信主人：${clip(text, 60)}`, target: { to: String(cfg.ownerMid) } }, opts(cfg, client, exec));
+  return request({ kind: 'dm', payload: { to: cfg.ownerMid, text }, preview: `私信主人：${clip(text, 60)}`, target: { to: String(cfg.ownerMid) }, audience: 'own' }, opts(cfg, client, exec));
 }
 
 export async function postTool(args, exec, { cfg = loadConfig() } = {}) {
@@ -177,7 +185,7 @@ export async function followTool(args, exec, { cfg = loadConfig() } = {}) {
     }
   }
   const preview = `${kind === 'follow' ? '关注' : '取关'} UP 主「${u.name}」：${clip(why, 40)}${seen ? `（看过他的《${clip(seen.title, 20)}》）` : ''}`;
-  return request({ kind, payload: { mid: u.mid }, preview, target: { mid: String(u.mid), name: u.name, why }, watched: Boolean(seen), own }, opts(cfg, client, exec));
+  return request({ kind, payload: { mid: u.mid }, preview, target: { mid: String(u.mid), name: u.name, why }, watched: Boolean(seen), own, audience: isFriend(cfg, u.mid) ? 'own' : 'out' }, opts(cfg, client, exec));
 }
 
 export async function confirmTool(args, exec, { cfg = loadConfig() } = {}) {

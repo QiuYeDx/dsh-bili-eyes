@@ -5,10 +5,11 @@
 // 写操作还是走 act.js 的 request：全部停下、风控暂停、正文检查、间隔、核实可见性都照旧。
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR } from './config.js';
+import { DATA_DIR, permFor, MODE_TEXT } from './config.js';
 import { clip } from './look.js';
 import { request as actRequest, checkText, readAudit, ActError } from './act.js';
 import { notify as gateNotify, gateKind } from './gate.js';
+import { videoUp, replyAudience } from './audience.js';
 
 export const ENGINE_FILE = path.join(DATA_DIR, 'engine.json');
 const KEEP_DECISIONS = 400;
@@ -192,6 +193,23 @@ export async function processBatch(items, { cfg, ask, client, selfMid = 0, owner
     todo.push(x);
   }
   if (!todo.length) return { results };
+
+  // 回给谁：守评论区都在主人的投稿下；收件箱的看是谁的视频（查不到就按能套上的几格里最严的算）
+  // 后台没有「主人开口」这回事：那一格是「关」或「主人开口才做」的都回不了
+  for (const x of todo) {
+    const upMid = x.source === 'guard' ? Number(cfg.ownerMid) || null
+      : Number(x.type ?? 1) === 1 && client?.view ? (await (d.videoUp ?? videoUp)(client, x.oid)) || null : null;
+    x.audience = replyAudience(cfg, { mid: x.user?.mid, upMid });
+    x.perm = permFor(cfg, 'reply', x.audience);
+  }
+  const cannot = (x) => x.perm.mode === 'off' || x.perm.mode === 'asked';
+  const permWhy = (x) => `权限表里「${x.perm.label}」是「${MODE_TEXT[x.perm.mode]}」，后台不回`;
+  // 回不了、要主人处理的也不转告（「要主人处理的」选了跳过）：不用问模型
+  if (cfg.engOwner === 'skip') {
+    for (const x of todo.filter(cannot)) decide(x, 'skipped', { cat: 'skip', why: permWhy(x) });
+    todo.splice(0, todo.length, ...todo.filter((x) => !cannot(x)));
+    if (!todo.length) return { results };
+  }
   if (!ask) { for (const x of todo) decide(x, 'held', { why: '没有可用的模型' }); return { results, error: '没有可用的模型' }; }
 
   let verdicts;
@@ -212,6 +230,7 @@ export async function processBatch(items, { cfg, ask, client, selfMid = 0, owner
     const base = { cat: v.cat, why: v.why, note: v.note, draftText: v.reply };
     let p = plan(cfg, v, { chance, rand });
     if (p.act === 'write' && mode === 'notify') p = { act: 'notify', why: '档位是「只告诉主人」' };
+    if (p.act === 'write' && cannot(x)) p = { act: 'skip', why: permWhy(x) };
     if (p.act === 'skip') { decide(x, 'skipped', { ...base, why: p.why || v.why }); continue; }
     if (p.act === 'notify') { decide(x, 'notified', { ...base, why: p.why || v.why }); continue; }
 
@@ -237,8 +256,7 @@ export async function processBatch(items, { cfg, ask, client, selfMid = 0, owner
       payload: { oid: String(x.oid), type: x.type ?? 1, root: String(x.root), parent: String(x.parent), text, ...(x.inbox ? { inbox: x.inbox } : {}) },
       preview: `回复 ${x.user?.name || '对方'}：${clip(text, 60)}`,
       target,
-      modeKey: x.source === 'guard' ? 'guardMode' : 'inboxReplyMode',
-      modeLabel: x.source === 'guard' ? '守评论区' : '收件箱自动回复',
+      audience: x.audience,
       ...(quota ? { quota } : {}),
       maxPerParent: cfg.engRounds,
       gapSeconds: cfg.engGapSeconds,

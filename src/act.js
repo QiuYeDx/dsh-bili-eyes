@@ -1,13 +1,13 @@
 // 写操作：点赞/收藏、评论/回复、私信主人、发动态、关注/取关。要不要发、发给谁、发几条都在这里决定。
 //
-// 每次写都按这个顺序：档位（off/approve/auto）→ 全部停下 / 风控暂停 → 内容检查 → 额度 → 可信判断。
-//   auto + 可信会话 → 直接发；可信会话里「先问主人」且用内置门卫 → 弹 DSH 原生审批卡片，主人点允许就发；
-//   其余起草（drafts.json，编号 #n），等主人同意后由 bili_confirm 或设置页发出。
+// 每次写都按这个顺序：权限表里那一格（这类操作 × 对谁，见 config.js 的 PERM_ROWS）→ 全部停下 / 风控暂停 → 内容检查 → 额度 → 可信判断。
+//   直接做 + 可信会话 → 直接发；主人刚开口要过 → 直接发；可信会话用内置门卫 → 弹 DSH 原生审批卡片，主人点允许就发；
+//   「先问主人」的其余起草（drafts.json，编号 #n），等主人同意后由 bili_confirm 或设置页发出；「主人开口才做」的其余不做、也不起草。
 // 所有写操作（含起草、拒绝、失败）记进 actions.jsonl。硬上限写在代码里，模型改不了。
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR, saveConfig, DEFAULTS } from './config.js';
+import { DATA_DIR, saveConfig, DEFAULTS, permFor, permKey, permLabel } from './config.js';
 import { clip } from './look.js';
 import { sessionContext, ownerMessages, gateKind } from './gate.js';
 
@@ -17,7 +17,6 @@ export const ACTIONS_FILE = path.join(DATA_DIR, 'actions.jsonl');
 export class ActError extends Error {}
 
 export const KIND_TEXT = { like: '点赞', fav: '收藏', unfav: '取消收藏', comment: '评论', reply: '回复', dm: '私信', post: '动态', follow: '关注', unfollow: '取关' };
-const MODE_KEY = { like: 'likeMode', fav: 'likeMode', unfav: 'likeMode', comment: 'commentMode', reply: 'commentMode', dm: 'dmMode', post: 'postMode', follow: 'followMode', unfollow: 'followMode' };
 const QUOTA_KEY = { like: 'likePerDay', fav: 'favPerDay', unfav: 'favPerDay', comment: 'commentPerDay', reply: 'replyPerDay', dm: 'dmPerDay', post: 'postPerDay', follow: 'followPerDay', unfollow: 'followPerDay' };
 // 关注：两次之间至少 10 分钟，每天最多 10 个（设置里只能调低）；取关最高只到「先问主人」
 const FOLLOW = new Set(['follow', 'unfollow']);
@@ -311,20 +310,22 @@ async function perform(client, d, cfg) {
 
 /**
  * 写操作的入口。
- * @param {object} req {kind, payload, preview, target}：payload 是发请求要的参数，preview 是给人看的一句话，target 记进审计。
+ * @param {object} req {kind, payload, preview, target, audience}：payload 是发请求要的参数，preview 是给人看的一句话，target 记进审计。
+ *   audience 对谁：'own' 自己人 / 'home' 主人评论区里的别人 / 'out' 外面的人；判断不出时给几个，按最严的那格算。不给 = 外面的人。
  *   评论引擎（engine.js）还会带上自己的规矩，覆盖默认的：
- *   modeKey 用哪个档位（比如 guardMode）、modeLabel 它在设置页叫什么；
  *   quota {max, count(entries, now), label} 单独的额度；maxPerParent 同一条评论最多回几次；gapSeconds 两次至少隔多久
  * @param {object} o {cfg, client, sessionId, via:'tool'|'ui', draftsFile, auditFile, now}
  * @returns {Promise<{status:'sent'|'draft'|'refused'|'failed', text:string, draft?:object}>}
  */
 export async function request(req, { cfg, client, sessionId = '', session = null, approve = null, via = 'tool', draftsFile = DRAFTS_FILE, auditFile = ACTIONS_FILE, now = Date.now(), gateOpts } = {}) {
   const { kind } = req;
-  const modeKey = req.modeKey ?? MODE_KEY[kind];
-  let mode = cfg[modeKey];
+  const audience = [].concat(req.audience ?? 'out');
+  const perm = permFor(cfg, kind, audience);
+  let { mode } = perm;
   if (kind === 'unfollow' && mode === 'auto') mode = 'approve';   // 取关永远先问主人
   const refuse = (why) => { audit({ kind, status: 'refused', target: req.target, text: req.payload?.text, error: why }, auditFile); return { status: 'refused', text: `${NOT_DONE[kind]}：${why}` }; };
-  if (mode === 'off') return refuse(`主人没开「${req.modeLabel ?? KIND_TEXT[kind]}」（设置页 → 互动）`);
+  // 主人定的规矩：直接说清楚，免得她起草、去问主人、或者换个说法再试
+  if (mode === 'off') return refuse(`权限表里「${perm.label}」是关着的（设置页 → 互动 → 设置）。这是主人定的：不用起草，也不用问主人，别换个说法再试；主人问起就照实说这一格关着。`);
   if (cfg.writePaused) return refuse('主人在设置页按了「全部停下」');
   const drafts = loadDrafts(draftsFile);
   if (drafts.pausedUntil > now) return refuse(`${drafts.pauseReason || '刚才被 B站风控拦过'}，写操作暂停到 ${new Date(drafts.pausedUntil).toLocaleTimeString()}`);
@@ -345,7 +346,8 @@ export async function request(req, { cfg, client, sessionId = '', session = null
   // 后台「自己逛」没有会话：开没开、开到哪一档是主人在设置里定的，按可信算
   const ctx = via === 'background' ? { trusted: true, label: '自己逛（后台）', gate: 'background' } : await sessionContext(cfg, session ? { sessionId, session } : sessionId, gateOpts);
   // 关注「直接发」只对她最近真看过的 UP 主：就算会话可信，这一轮也可能是逛的时候被评论带偏的
-  const autoOk = mode === 'auto' && (kind !== 'follow' || req.watched || via === 'ui');
+  const own = audience.length === 1 && audience[0] === 'own';
+  const autoOk = mode === 'auto' && (kind !== 'follow' || req.watched || own || via === 'ui');
   if (autoOk && (ctx.trusted || via === 'ui')) {
     return send({ kind, payload: req.payload, preview: req.preview, target: req.target, gapSeconds: req.gapSeconds }, { cfg, client, entries, now, auditFile, draftsFile, how: via === 'ui' ? 'ui' : 'auto' });
   }
@@ -364,10 +366,12 @@ export async function request(req, { cfg, client, sessionId = '', session = null
       audit({ kind, status: 'rejected', target: req.target, text: req.payload?.text, how: 'card' }, auditFile);
       return { status: 'refused', text: `主人在审批卡片上点了拒绝，${NOT_DONE[kind]}。别换个说法再试。` };
     }
-    // 'cancelled' / 'unavailable'（没有窗口能弹卡片）：照常起草
+    // 'cancelled' / 'unavailable'（没有窗口能弹卡片）：「先问主人」照常起草
   }
+  // 「主人开口才做」：主人没开口、也没当场点允许，就不做，也不起草
+  if (mode === 'asked') return refuse(`「${perm.label}」是「主人开口才做」，这次不是主人开口要的，所以不做。不用起草，也不用问主人，别换个说法再试。`);
   // 起草
-  const draft = { id: drafts.next, kind, payload: req.payload, preview: req.preview, target: req.target, createdAt: now, sessionId: String(sessionId), where: ctx.label, status: 'pending', ...(req.modeKey ? { modeKey: req.modeKey, modeLabel: req.modeLabel } : {}), ...(req.gapSeconds ? { gapSeconds: req.gapSeconds } : {}) };
+  const draft = { id: drafts.next, kind, payload: req.payload, preview: req.preview, target: req.target, audience, modeKey: perm.key, createdAt: now, sessionId: String(sessionId), where: ctx.label, status: 'pending', ...(req.gapSeconds ? { gapSeconds: req.gapSeconds } : {}) };
   drafts.next += 1;
   drafts.list.push(draft);
   saveDrafts(drafts, draftsFile);
@@ -421,7 +425,7 @@ async function send(d, { cfg, client, entries = readAudit(2000), now = Date.now(
     let extra = RISK_CODES.has(e?.code) ? '，写操作先暂停 30 分钟' : '';
     if (FOLLOW.has(d.kind)) {
       if (e?.code === 22009) {
-        try { saveConfig({ followMode: 'off' }); } catch { /* 改不了配置也要告诉主人 */ }
+        try { saveConfig({ permFollowOwn: 'off', permFollowOut: 'off' }); } catch { /* 改不了配置也要告诉主人 */ }
         extra = '。关注数到上限了，已经把「关注」关掉，告诉主人';
       } else if (!FOLLOW_STOP.has(e?.code)) {
         pauseFollow(draftsFile, now + 6 * 3600_000, `${KIND_TEXT[d.kind]}被 B站拦过（${why}）`);
@@ -487,7 +491,9 @@ export async function confirm(draftId, decision, { cfg, client, sessionId = '', 
     return { status: 'refused', text: `草稿 #${d.id} 丢掉了` };
   }
   if (cfg.writePaused) return { status: 'refused', text: `${NOT_DONE[d.kind]}：主人在设置页按了「全部停下」` };
-  if (cfg[d.modeKey ?? MODE_KEY[d.kind]] === 'off') return { status: 'refused', text: `${NOT_DONE[d.kind]}：主人把「${d.modeLabel ?? KIND_TEXT[d.kind]}」关了` };
+  // 0.6.0 留下的草稿记的是老档位名（commentMode、guardMode…），按「外面的人」那格算
+  const cell = d.modeKey?.startsWith('perm') ? d.modeKey : permKey(d.kind, 'out');
+  if (cfg[cell] === 'off' || (d.modeKey && !d.modeKey.startsWith('perm') && cfg[d.modeKey] === 'off')) return { status: 'refused', text: `${NOT_DONE[d.kind]}：主人把「${permLabel(cell)}」关了` };
   if (drafts.pausedUntil > now) return { status: 'refused', text: `${NOT_DONE[d.kind]}：写操作暂停到 ${new Date(drafts.pausedUntil).toLocaleTimeString()}（${drafts.pauseReason || '刚被风控拦过'}）` };
   let how = 'ui';
   if (via !== 'ui') {

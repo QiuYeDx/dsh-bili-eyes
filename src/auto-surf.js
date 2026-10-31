@@ -12,6 +12,7 @@ import { DATA_DIR, loadConfig } from './config.js';
 import { clip } from './look.js';
 import { surf, parseJsonArray } from './surf.js';
 import { request, checkText } from './act.js';
+import { videoAudience } from './audience.js';
 import { notify, gateKind } from './gate.js';
 import { ownerName, writeClient } from './interact.js';
 
@@ -160,7 +161,7 @@ export async function autoSurfOnce({ cfg = loadConfig(), ask, log = () => {}, no
       try {
         const text = checkText('comment', c.text, { ownerName: name, mention: c.mention });   // 和工具一样的正文检查
         const v = await client.view({ bvid: x.bvid });
-        const res = await d.request({ kind: 'comment', payload: { oid: String(v.aid), type: 1, root: '0', parent: '0', text, ...(c.mention ? { atNameToMid: { [name]: cfg.ownerMid } } : {}) }, preview: `在《${clip(x.title, 30)}》下评论：${clip(text, 60)}`, target: { oid: String(v.aid), type: 1, root: '0', parent: '0', bvid: x.bvid, title: x.title, url: `https://www.bilibili.com/video/${x.bvid}`, to: c.mention ? name : '' } }, opt);
+        const res = await d.request({ kind: 'comment', payload: { oid: String(v.aid), type: 1, root: '0', parent: '0', text, ...(c.mention ? { atNameToMid: { [name]: cfg.ownerMid } } : {}) }, preview: `在《${clip(x.title, 30)}》下评论：${clip(text, 60)}`, target: { oid: String(v.aid), type: 1, root: '0', parent: '0', bvid: x.bvid, title: x.title, url: `https://www.bilibili.com/video/${x.bvid}`, to: c.mention ? name : '' }, audience: videoAudience(cfg, v.owner?.mid) }, opt);
         rec.comments.push({ bvid: x.bvid, title: x.title, text, mention: c.mention, status: res.status, result: clip(res.text, 120) });
       } catch (e) { rec.comments.push({ bvid: x.bvid, title: x.title, text: c.text, mention: c.mention, status: 'failed', result: clip(e?.message ?? e, 120) }); }
     }
@@ -174,7 +175,7 @@ export async function autoSurfOnce({ cfg = loadConfig(), ask, log = () => {}, no
         else {
           try {
             const text = checkText('dm', `${rec2.why || '这个你应该会喜欢'}\n《${clip(x.title, 60)}》${url}`, { ownerName: name });
-            rec.recommend.ways.dm = (await d.request({ kind: 'dm', payload: { to: cfg.ownerMid, text }, preview: `私信主人推荐《${clip(x.title, 30)}》`, target: { to: String(cfg.ownerMid), bvid: x.bvid, title: x.title } }, opt)).status;
+            rec.recommend.ways.dm = (await d.request({ kind: 'dm', payload: { to: cfg.ownerMid, text }, preview: `私信主人推荐《${clip(x.title, 30)}》`, target: { to: String(cfg.ownerMid), bvid: x.bvid, title: x.title }, audience: 'own' }, opt)).status;
           } catch (e) { rec.recommend.ways.dm = `failed：${clip(e?.message ?? e, 80)}`; }
         }
       }

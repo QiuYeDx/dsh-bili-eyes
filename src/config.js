@@ -55,11 +55,11 @@ export const DEFAULTS = Object.freeze({
   inboxQuietMode: 'hold',  // 安静时段里：hold 照查但先攒着、时段结束再处理 / skip 不查 / normal 照常
   inboxDm: true,           // 也查私信
   inboxNotifyPerHour: 6,   // 每小时最多转达几次
-  inboxReplyMode: 'wake',  // 别人回复 / @ 她的评论：wake 叫醒她自己处理（老办法）/ notify 只告诉主人 / approve 插件起草、先问主人 / auto 插件直接回
+  inboxReplyMode: 'wake',  // 别人回复 / @ 她的评论：wake 叫醒她自己处理（老办法）/ notify 只告诉主人 / engine 插件按权限表回
   inboxChatChance: 80,     // 别人接她的话（闲聊）时回的概率（%）
   inboxReport: 'auto',     // 回完要不要告诉主人：all 都说 / auto 只说直接回了的 / none 不说
   // 守评论区（guard.js）：盯着主人投稿的评论区，有新评论就判断、回复或转告主人
-  guardMode: 'off',        // off 关 / notify 只告诉主人 / approve 起草后先问主人 / auto 直接回
+  guardMode: 'off',        // off 关 / notify 只告诉主人 / on 按权限表回（「回复 · 主人评论区里的别人」那格）
   guardAutoNew: true,      // 主人新发的投稿自动加入
   guardDays: 30,           // 只盯最近多少天的投稿（0 = 不限）
   guardVideos: '',         // 另外要盯的 BV 号（老视频），逗号或换行分隔
@@ -81,13 +81,21 @@ export const DEFAULTS = Object.freeze({
   engPerDay: 15,           // 单独一份时：每天最多回几条
   engPerVideoHour: 3,      // 每个视频每小时最多回几条
   engGapSeconds: 60,       // 两次回复至少隔多久
-  // 互动（写操作）：off 关 / approve 先起草等主人同意 / auto 在额度内直接发
+  // 互动（写操作）的权限表：每一格是「这类操作 × 对谁」的档位，见 PERM_ROWS
+  //   off 关 / asked 主人开口才做（她自己不主动，也不起草）/ approve 先问主人 / auto 在额度内直接做
   ownerMid: 0,             // 主人的 B站 UID：@ 和私信只能对着他
-  likeMode: 'off',
-  commentMode: 'off',
-  dmMode: 'off',
-  postMode: 'off',
-  followMode: 'off',       // 关注 UP 主；取关最高只到「先问主人」
+  friendMids: '',          // 其他自己人（主人的小号、朋友）的 UID：只影响权限表按「自己人」算，@ 和私信仍然只对主人
+  permLikeOwn: 'off',      // 点赞、收藏 · 自己人的视频
+  permLikeOut: 'off',      //            · 别的视频
+  permCommentOwn: 'off',   // 顶层评论 · 在自己人的投稿下
+  permCommentOut: 'off',   //          · 在别的视频下
+  permReplyOwn: 'off',     // 回复 · 被回的是自己人
+  permReplyHome: 'off',    //      · 在自己人的投稿下回别人（守评论区）
+  permReplyOut: 'off',     //      · 在别处回别人
+  permFollowOwn: 'off',    // 关注 · 自己人
+  permFollowOut: 'off',    //      · 别的 UP 主（取关最高只到「先问主人」）
+  permDm: 'off',           // 私信主人
+  permPost: 'off',         // 发动态（公开，不分对象）
   followTag: 'AI 的关注',
   favFolder: 'AI 的收藏',   // 她收藏的视频放进这个收藏夹（没有就建，公开）；空 = 默认收藏夹   // 她关注的人放进 B站的这个分组（没有就建）；也是她能取关的范围
   likePerDay: 30,
@@ -110,12 +118,89 @@ export const DEFAULTS = Object.freeze({
   untrustedCwd: '',        // 内置门卫：工作目录在这些目录下就当桥接会话（一行一个）
 });
 
-export const MODES = Object.freeze(['off', 'approve', 'auto']);
-const MODE_OPTIONS = [['off', '关'], ['approve', '先问主人'], ['auto', '直接发（在额度内）']];
+// 档位从严到松
+export const MODES = Object.freeze(['off', 'asked', 'approve', 'auto']);
+export const MODE_TEXT = Object.freeze({ off: '关', asked: '主人开口才做', approve: '先问主人', auto: '直接做' });
+const PERM_OPTIONS = MODES.map((m) => [m, MODE_TEXT[m]]);
+/** 两个档位里更严的那个。 */
+export const stricter = (a, b) => (MODES.indexOf(a) <= MODES.indexOf(b) ? a : b);
+
+// 对象：自己人（主人和其他自己人）/ 主人评论区里的别人（在自己人的投稿下）/ 外面的人
+export const AUDIENCES = Object.freeze([['own', '自己人'], ['home', '主人评论区里的别人'], ['out', '外面的人']]);
+const AUD_TEXT = Object.fromEntries(AUDIENCES);
+// 权限表：每行一类操作，cols 是这一行有哪几格（all = 不分对象）
+export const PERM_ROWS = Object.freeze([
+  { row: 'like', label: '点赞、收藏', kinds: ['like', 'fav', 'unfav'], cols: { own: 'permLikeOwn', out: 'permLikeOut' } },
+  { row: 'comment', label: '顶层评论', kinds: ['comment'], cols: { own: 'permCommentOwn', out: 'permCommentOut' } },
+  { row: 'reply', label: '回复', kinds: ['reply'], cols: { own: 'permReplyOwn', home: 'permReplyHome', out: 'permReplyOut' } },
+  { row: 'follow', label: '关注', kinds: ['follow', 'unfollow'], cols: { own: 'permFollowOwn', out: 'permFollowOut' } },
+  { row: 'dm', label: '私信主人', kinds: ['dm'], cols: { own: 'permDm' } },
+  { row: 'post', label: '发动态', kinds: ['post'], cols: { all: 'permPost' } },
+]);
+
+/** 这类操作对这类对象用哪一格。这一行没有这一列时按「外面的人」算。 */
+export function permKey(kind, audience) {
+  const r = PERM_ROWS.find((x) => x.kinds.includes(kind));
+  if (!r) return null;
+  return r.cols.all ?? r.cols[audience] ?? r.cols.out ?? r.cols.own;
+}
+
+/** 「回复 · 外面的人」这样的名字。 */
+export function permLabel(key) {
+  for (const r of PERM_ROWS) for (const [col, k] of Object.entries(r.cols)) if (k === key) return col === 'all' ? r.label : `${r.label} · ${AUD_TEXT[col]}`;
+  return key;
+}
+
+/**
+ * 一次写操作的档位。audience 是一个对象，或者判断不出是哪个时给几个，取里面最严的那格。
+ * 返回 {key, mode, label}。
+ */
+export function permFor(cfg, kind, audience) {
+  const keys = [...new Set([].concat(audience ?? 'out').map((a) => permKey(kind, a)).filter(Boolean))];
+  if (!keys.length) return { key: null, mode: 'off', label: kind };
+  const modeOf = (k) => (MODES.includes(cfg[k]) ? cfg[k] : 'off');
+  const key = keys.reduce((a, b) => (MODES.indexOf(modeOf(b)) < MODES.indexOf(modeOf(a)) ? b : a));
+  return { key, mode: modeOf(key), label: permLabel(key) };
+}
+
+/** 自己人：主人 + 其他自己人。 */
+export function friendSet(cfg) {
+  const s = new Set(String(cfg.friendMids ?? '').split(/[\s,，]+/).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0));
+  if (cfg.ownerMid > 0) s.add(Number(cfg.ownerMid));
+  return s;
+}
+export const isFriend = (cfg, mid) => Number(mid) > 0 && friendSet(cfg).has(Number(mid));
+
+/**
+ * 0.6.0 的配置：每类操作一个档位（likeMode…followMode），守评论区、收件箱各有自己的「先问 / 直接回」。
+ * 换成权限表，行为不变（见 docs/权限-设计.md「迁移」）。已经有权限表的不再推；返回新对象。
+ */
+export function migrateLegacy(user) {
+  const u = { ...user };
+  const LEGACY = ['likeMode', 'commentMode', 'dmMode', 'postMode', 'followMode'];
+  const engineMode = (v) => (v === 'approve' || v === 'auto' ? v : null);
+  const g = engineMode(u.guardMode); const ib = engineMode(u.inboxReplyMode);
+  const hasPerm = Object.keys(u).some((k) => k.startsWith('perm'));
+  if (!hasPerm && (LEGACY.some((k) => k in u) || g || ib)) {
+    const m = (k) => (MODES.includes(u[k]) ? u[k] : 'off');
+    const comment = m('commentMode');
+    Object.assign(u, {
+      permLikeOwn: m('likeMode'), permLikeOut: m('likeMode'),
+      permCommentOwn: comment, permCommentOut: comment,
+      permReplyOwn: comment, permReplyHome: g ?? ib ?? comment, permReplyOut: ib ?? comment,
+      permFollowOwn: m('followMode'), permFollowOut: m('followMode'),
+      permDm: m('dmMode'), permPost: m('postMode'),
+    });
+  }
+  if (g) u.guardMode = 'on';
+  if (ib) u.inboxReplyMode = 'engine';
+  for (const k of LEGACY) delete u[k];
+  return u;
+}
 
 export function loadConfig(file = CONFIG_FILE) {
   let user = {};
-  try { user = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, '')); } catch { /* 没有配置文件就用默认 */ }
+  try { user = migrateLegacy(JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''))); } catch { /* 没有配置文件就用默认 */ }
   const cfg = { ...DEFAULTS };
   for (const [k, v] of Object.entries(user)) if (k in DEFAULTS && typeof v === typeof DEFAULTS[k]) cfg[k] = v;
   return cfg;
@@ -166,11 +251,11 @@ export const FIELDS = Object.freeze([
   { key: 'inboxIntervalSeconds', group: 'inbox', type: 'int', min: 60, max: 3600, unit: '秒', label: '未读数没变时也完整查一次', hint: '兜底：万一未读数没反映出来，最晚隔这么久也会查到' },
   { key: 'inboxQuiet', group: 'inbox', type: 'text', max: 11, pattern: /^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$/, patternHint: '写成 00:30-07:30', label: '安静时段', hint: '比如 00:30-07:30（可跨午夜）；留空 = 没有安静时段' },
   { key: 'inboxQuietMode', group: 'inbox', type: 'enum', options: [['hold', '照查，但先攒着，时段结束再处理'], ['skip', '不查'], ['normal', '照常（照样回复、转达）']], label: '安静时段里', hint: '守评论区也按这个来' },
-  { key: 'inboxReplyMode', group: 'inbox', type: 'enum', options: [['wake', '叫醒她自己处理（交给门卫转达）'], ['notify', '只告诉主人'], ['approve', '插件起草，先问主人'], ['auto', '插件直接回']], label: '别人回复 / @ 她的评论', hint: '后三种交给评论引擎：插件自己判断要不要回、怎么回（规矩在「互动 → 守评论区 → 怎么回」），不用等她被叫醒。私信不受影响，主人的私信照旧转达' },
+  { key: 'inboxReplyMode', group: 'inbox', type: 'enum', options: [['wake', '叫醒她自己处理（交给门卫转达）'], ['notify', '只告诉主人'], ['engine', '插件按权限表回']], label: '别人回复 / @ 她的评论', hint: '后两种交给评论引擎：插件自己判断要不要回、怎么回（规矩在「互动 → 设置 → 怎么回」），不用等她被叫醒。回不回、要不要先问，看「互动 → 设置」权限表的「回复」那一行：在自己人的投稿下算「主人评论区里的别人」，别处算「外面的人」。主人的回复、@ 和私信照旧叫醒她' },
   { key: 'inboxChatChance', group: 'inbox', type: 'int', min: 0, max: 100, unit: '%', label: '别人接她的话时回的概率', hint: '闲聊、夸奖这类；问题和要主人处理的不受它影响' },
   { key: 'inboxReport', group: 'inbox', type: 'enum', options: [['auto', '只说直接回了的'], ['all', '都说（含起草、跳过）'], ['none', '不说']], label: '处理完要不要告诉主人', hint: '经门卫转达（比如 QQ 私聊）；要主人处理的那些总会说' },
   { key: 'inboxNotifyPerHour', group: 'inbox', type: 'int', min: 1, max: 60, unit: '次', label: '每小时最多转达几次' },
-  { key: 'guardMode', group: 'guard', type: 'enum', options: [['off', '关'], ['notify', '只告诉主人'], ['approve', '起草后先问主人'], ['auto', '直接回']], label: '守评论区', hint: '盯着主人投稿的评论区：能答的答、闲聊的偶尔接一句、要主人处理的转告主人、不值得回的跳过。要先设置主人 UID（互动 → 设置）' },
+  { key: 'guardMode', group: 'guard', type: 'enum', options: [['off', '关'], ['notify', '只告诉主人'], ['on', '按权限表回']], label: '守评论区', hint: '盯着主人投稿的评论区：能答的答、闲聊的偶尔接一句、要主人处理的转告主人、不值得回的跳过。回不回、要不要先问，看权限表里「回复 · 主人评论区里的别人」那一格。要先设置主人 UID' },
   { key: 'guardAutoNew', group: 'guard', type: 'bool', label: '新投稿自动加入' },
   { key: 'guardDays', group: 'guard', type: 'int', min: 0, max: 3650, unit: '天', label: '只盯最近多少天的投稿', hint: '0 = 不限（主人最近的几十条投稿都算）；手动加的不受它限制' },
   { key: 'guardVideos', group: 'guard', type: 'text', max: 2000, multiline: true, pattern: /^[\sBV0-9A-Za-z,，]*$/, patternHint: '只写 BV 号，用逗号或换行分开', label: '另外要盯的投稿', hint: '老视频也想盯着的，填 BV 号' },
@@ -192,11 +277,7 @@ export const FIELDS = Object.freeze([
   { key: 'engPerVideoHour', group: 'engine', type: 'int', min: 1, max: 30, unit: '条', label: '每个视频每小时最多回' },
   { key: 'engGapSeconds', group: 'engine', type: 'int', min: 10, max: 3600, unit: '秒', label: '两次回复至少隔' },
   { key: 'ownerMid', group: 'act', type: 'int', min: 0, max: Number.MAX_SAFE_INTEGER, label: '主人的 B站 UID', hint: '@ 和私信只能对着这个账号；0 = 没设置（不能 @、不能私信）' },
-  { key: 'likeMode', group: 'act', type: 'enum', options: MODE_OPTIONS, label: '点赞、收藏' },
-  { key: 'commentMode', group: 'act', type: 'enum', options: MODE_OPTIONS, label: '评论、回复' },
-  { key: 'dmMode', group: 'act', type: 'enum', options: MODE_OPTIONS, label: '私信主人' },
-  { key: 'postMode', group: 'act', type: 'enum', options: MODE_OPTIONS, label: '发动态' },
-  { key: 'followMode', group: 'act', type: 'enum', options: MODE_OPTIONS, label: '关注 UP 主', hint: '「直接发」只对她最近 14 天真看过的 UP 主；取关一律先问主人，而且只能取关她自己关注的人' },
+  { key: 'friendMids', group: 'act', type: 'text', max: 400, multiline: true, pattern: /^[\d\s,，]*$/, patternHint: '只写 UID 数字，用逗号或换行分开', label: '其他自己人', hint: '主人的小号、一起玩的朋友的 UID。权限表里对他们按「自己人」算；@ 和私信仍然只能对着主人' },
   { key: 'likePerDay', group: 'act', type: 'int', min: 0, max: 200, unit: '次', label: '每天最多点赞/收藏' },
   { key: 'commentPerDay', group: 'act', type: 'int', min: 0, max: 50, unit: '条', label: '每天最多评论' },
   { key: 'replyPerDay', group: 'act', type: 'int', min: 0, max: 100, unit: '条', label: '每天最多回复' },
@@ -209,6 +290,7 @@ export const FIELDS = Object.freeze([
   { key: 'writeGapSeconds', group: 'act', type: 'int', min: 10, max: 3600, unit: '秒', label: '两次之间至少隔' },
   { key: 'draftMinutes', group: 'act', type: 'int', min: 5, max: 1440, unit: '分钟', label: '草稿有效期', hint: '这么久没同意就作废' },
   { key: 'writePaused', group: 'act', type: 'bool', label: '全部停下', hint: '打开后一切写操作都拒绝（草稿也发不出去）' },
+  ...PERM_ROWS.flatMap((r) => Object.entries(r.cols).map(([col, key]) => ({ key, group: 'perm', type: 'enum', options: PERM_OPTIONS, row: r.row, col, label: permLabel(key) }))),
   { key: 'gateMode', group: 'gate', type: 'enum', options: [['auto', '自动（桥接提供的门卫 > 门卫地址 > 内置）'], ['dsh-qq', 'dsh-qq 桥接（插件自己当门卫）'], ['builtin', '只用内置门卫']], label: '门卫来源', hint: '用 dsh-qq（h-D-ACE/dsh-qq）接 QQ 的，选 dsh-qq 并填下面的桥接目录，不用另外跑门卫服务' },
   { key: 'qqBridgeDir', group: 'gate', type: 'dir', label: 'dsh-qq 桥接目录', hint: '有 config.json 和 src/bridge.js 的那个目录；门卫来源选 dsh-qq 时用' },
   { key: 'gateUrl', group: 'gate', type: 'text', max: 200, pattern: /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/\S*)?$/, patternHint: '只能是本机地址 http://127.0.0.1:端口/路径', label: '门卫地址', hint: '本机 HTTP 接口，回答「这个会话是不是主人本人」「主人说过什么」并转达收件箱；留空 = 只能在这里点同意' },

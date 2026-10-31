@@ -9,7 +9,7 @@ import path from 'node:path';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bili-eyes-act-'));
 process.env.DSH_HOME = tmp;
-const { DEFAULTS } = await import('../src/config.js');
+const { DEFAULTS, migrateLegacy } = await import('../src/config.js');
 const { checkText, judge, request, confirm, readAudit, todayCounts, deleteSent, ActError } = await import('../src/act.js');
 const { feedItem, dmItem, checkInbox, deliver, inQuiet, formatInbox, markItems, notifyText } = await import('../src/inbox.js');
 const { sessionContext, ownerMessages } = await import('../src/gate.js');
@@ -18,7 +18,8 @@ const { pickCandidates, parseJsonArray, choose } = await import('../src/surf.js'
 
 let n = 0;
 const files = () => { n += 1; return { draftsFile: path.join(tmp, `d${n}.json`), auditFile: path.join(tmp, `a${n}.jsonl`) }; };
-const cfgOf = (o = {}) => ({ ...DEFAULTS, ownerMid: 42, ...o });
+// 用 0.6.0 的档位写法（commentMode…）也行：先迁移成权限表
+const cfgOf = (o = {}) => ({ ...DEFAULTS, ownerMid: 42, ...migrateLegacy(o) });
 function fakeClient() {
   const calls = [];
   const rec = (name, ret = {}) => async (arg) => { calls.push([name, arg]); return ret; };
@@ -404,7 +405,8 @@ test('关注：核实不到就记 unconfirmed、关注暂停 24 小时；22009 �
   const full = await request(followReq(), { cfg: cfgOf({ followMode: 'auto' }), client: followClient({ failWith: 22009 }), ...g });
   assert.match(full.text, /已经把「关注」关掉/);
   const { loadConfig } = await import('../src/config.js');
-  assert.equal(loadConfig().followMode, 'off');
+  assert.equal(loadConfig().permFollowOut, 'off');
+  assert.equal(loadConfig().permFollowOwn, 'off');
   const h = files();
   const priv = await request(followReq(), { cfg: cfgOf({ followMode: 'auto' }), client: followClient({ failWith: 22002 }), ...h });
   assert.doesNotMatch(priv.text, /暂停/);

@@ -105,6 +105,51 @@ a.be-et:hover{color:var(--brand)}
 .be-field small{color:var(--t3);font-size:12px}
 .be-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px}
 .be-fields .wide{grid-column:1/-1}
+.be-pm{container-type:inline-size;display:flex;flex-direction:column;gap:12px}
+.be-pm-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px;color:var(--t2)}
+.be-pm-bar .be-seg{max-width:100%;overflow-x:auto}
+.be-pm-bar .be-seg button{white-space:nowrap}
+.be-pm-grid{display:grid;grid-template-columns:minmax(92px,auto) repeat(3,minmax(0,1fr));align-items:stretch}
+.be-pm-grid>.hd:not(:first-child),.be-pm-grid .be-pm-cell{padding-left:12px}
+.be-pm-op,.be-pm-cell{padding:7px 0;border-top:1px solid color-mix(in srgb,var(--bd) 60%,transparent);min-width:0}
+.be-pm-grid>.hd{padding:0 0 6px;font-size:12px;color:var(--t3);font-weight:500}
+.be-pm-row{display:contents}
+.be-pm-op{font-size:13.5px;font-weight:500;line-height:1.3;display:flex;flex-direction:column;justify-content:center}
+.be-pm-op small{display:block;font-weight:400;font-size:11.5px;color:var(--t3);margin-top:2px}
+.be-pm-cell{display:flex;align-items:center;gap:8px}
+.be-pm-cell.span{grid-column:span 3}
+.be-pm-one{flex:0 1 156px;min-width:0}
+.be-pm-aud{display:none;font-size:12px;color:var(--t3);white-space:nowrap}
+.be-pm-note{font-size:12px;color:var(--t3)}
+.be-lv{appearance:none;-webkit-appearance:none;font:inherit;font-size:13px;line-height:1;height:30px;width:100%;max-width:156px;min-width:0;padding:0 26px 0 10px;border-radius:var(--rs);border:1px solid var(--bd);cursor:pointer;
+background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transition:background-color .15s,border-color .15s,color .15s}
+.be-lv{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 9 6'%3E%3Cpath d='M1 1l3.5 3.5L8 1' fill='none' stroke='%238b949e' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")}
+.be-lv:hover{border-color:color-mix(in srgb,var(--t3) 60%,var(--bd))}
+.be-lv:focus-visible{outline:2px solid color-mix(in srgb,var(--brand) 45%,transparent);outline-offset:1px}
+.be-lv option{color:var(--t1);background:var(--b1)}
+.be-lv.lv-off{color:var(--t3)}
+.be-lv.lv-asked{color:var(--brand);border-style:dashed;border-color:color-mix(in srgb,var(--brand) 45%,var(--bd))}
+.be-lv.lv-approve{color:var(--brand);border-color:color-mix(in srgb,var(--brand) 30%,var(--bd));background-color:color-mix(in srgb,var(--brand) 6%,var(--b1))}
+.be-lv.lv-auto{color:var(--pink);border-color:color-mix(in srgb,var(--pink) 32%,var(--bd));background-color:color-mix(in srgb,var(--pink) 5%,var(--b1))}
+.be-lv.changed{box-shadow:0 0 0 1px var(--b1),0 0 0 3px color-mix(in srgb,var(--brand) 30%,transparent)}
+.be-pm-legend{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 16px;margin:0;padding:10px 12px;border-radius:var(--rs);background:var(--b2);font-size:12px;color:var(--t2)}
+.be-pm-legend>div{display:flex;gap:8px;align-items:baseline;min-width:0}
+.be-pm-legend dt{flex:none;font-weight:600}
+.be-pm-legend dd{margin:0;color:var(--t3)}
+.be-pm-legend .lv-off{color:var(--t2)}.be-pm-legend .lv-asked,.be-pm-legend .lv-approve{color:var(--brand)}.be-pm-legend .lv-auto{color:var(--pink)}
+@container (max-width:520px){
+.be-pm-grid{grid-template-columns:1fr;row-gap:0}
+.be-pm-grid>.hd{display:none}
+.be-pm-op{padding:12px 0 4px}
+.be-pm-row.first .be-pm-op{border-top:0;padding-top:0}
+.be-pm-grid .be-pm-cell{border-top:0;padding:3px 0}
+.be-pm-cell.empty{display:none}
+.be-pm-cell.span{grid-column:auto}
+.be-pm-one{flex:1 1 0}
+.be-pm-note{display:none}
+.be-pm-aud{display:block;flex:0 0 112px}
+.be-pm-legend{grid-template-columns:1fr}
+}
 @media (max-width:560px){.be-fields{grid-template-columns:1fr}}
 .be-input,.be-select{font:inherit;font-size:14px;color:var(--t1);background:var(--b1);border:1px solid var(--bd);border-radius:var(--rs);padding:6px 10px;min-width:0;width:100%;box-sizing:border-box}
 .be-input:focus,.be-select:focus{outline:2px solid color-mix(in srgb,var(--brand) 40%,transparent);outline-offset:0;border-color:var(--brand)}
@@ -658,6 +703,49 @@ a.be-et:hover{color:var(--brand)}
           fld.unit && h('span', null, fld.unit)));
     }
 
+    // 权限表：行 = 哪类操作，列 = 对谁，每格一个档位（见 docs/权限-设计.md）。上面是预设，下面是档位图例
+    const PERM_COLS = [['own', '自己人', '主人和「其他自己人」'], ['home', '主人评论区', '在自己人的投稿下回别人'], ['out', '外面的人', '别人的视频和楼里']];
+    const PERM_PRESETS = [
+      ['only-own', '只和自己人', { own: 'auto', home: 'off', out: 'off', all: 'off' }],
+      ['own-free', '别人先问', { own: 'auto', home: 'approve', out: 'approve', all: 'approve' }],
+      ['all-ask', '都先问', { own: 'approve', home: 'approve', out: 'approve', all: 'approve' }],
+      ['all-auto', '都直接做', { own: 'auto', home: 'auto', out: 'auto', all: 'auto' }],
+      ['all-off', '全关', { own: 'off', home: 'off', out: 'off', all: 'off' }],
+    ];
+    const PERM_LEVELS = [['off', '关', '不做'], ['asked', '主人开口才做', '主人要、或点了审批卡片才做，不起草'], ['approve', '先问主人', '起草，等主人同意再发'], ['auto', '直接做', '额度内直接发']];
+    const PERM_ROW_NOTE = { follow: '取关最多先问；外面的只限看过的', post: '' };
+    function PermTable({ fields, draft, saved, onChange }) {
+      if (!fields.length) return h('div', { className: 'be-err' }, '插件已经更新，但 DSH 里跑的还是旧版本，权限表要重启 DSH 才能用。');
+      const rows = [];
+      for (const f of fields) {
+        let r = rows.find((x) => x.row === f.row);
+        if (!r) { r = { row: f.row, label: f.label.split(' · ')[0], cells: {} }; rows.push(r); }
+        r.cells[f.col] = f;
+      }
+      const lv = (f) => h('select', {
+        className: `be-lv lv-${draft[f.key]}${draft[f.key] !== saved[f.key] ? ' changed' : ''}`, value: draft[f.key], 'aria-label': f.label,
+        onChange: (e) => onChange({ [f.key]: e.target.value }),
+      }, f.options.map(([v, l]) => h('option', { key: v, value: v }, l)));
+      const current = PERM_PRESETS.find(([, , p]) => fields.every((f) => draft[f.key] === p[f.col]));
+      const usePreset = (id) => { const p = PERM_PRESETS.find((x) => x[0] === id)[2]; onChange(Object.fromEntries(fields.map((f) => [f.key, p[f.col]]))); };
+      return h('div', { className: 'be-pm' },
+        h('div', { className: 'be-pm-bar' }, h('span', null, '预设'),
+          h(Seg, { options: PERM_PRESETS.map(([id, l]) => [id, l]), value: current?.[0] ?? '', onChange: usePreset, small: true, label: '权限预设' }),
+          !current && h('span', { className: 'be-faint' }, '自定义')),
+        h('div', { className: 'be-pm-grid', role: 'table', 'aria-label': '权限表' },
+          h('div', { className: 'hd', role: 'columnheader' }),
+          PERM_COLS.map(([c, l, hint]) => h('div', { key: c, className: 'hd', role: 'columnheader', title: hint }, l)),
+          rows.map((r, i) => h('div', { key: r.row, className: `be-pm-row${i === 0 ? ' first' : ''}`, role: 'row' },
+            h('div', { className: 'be-pm-op', role: 'rowheader' }, r.label, PERM_ROW_NOTE[r.row] && h('small', null, PERM_ROW_NOTE[r.row])),
+            r.cells.all
+              ? h('div', { className: 'be-pm-cell span', role: 'cell' },
+                h('span', { className: 'be-pm-aud' }, '所有人'), h('div', { className: 'be-pm-one' }, lv(r.cells.all)), h('span', { className: 'be-pm-note' }, '公开发，不分对象'))
+              : PERM_COLS.map(([c, l]) => (r.cells[c]
+                ? h('div', { key: c, className: 'be-pm-cell', role: 'cell' }, h('span', { className: 'be-pm-aud' }, l), lv(r.cells[c]))
+                : h('div', { key: c, className: 'be-pm-cell empty', role: 'cell', 'aria-hidden': true })))))),
+        h('dl', { className: 'be-pm-legend' }, PERM_LEVELS.map(([k, l, d]) => h('div', { key: k }, h('dt', { className: `lv-${k}` }, l), h('dd', null, d)))));
+    }
+
     /** 几组设置项。groups: [[分组, 标题, 说明]]；actions: {分组: (保存后的配置) => 额外按钮} */
     function ConfigGroups({ groups, toast, actions = {}, footer = false, onSaved }) {
       const st = useView('config');
@@ -680,7 +768,9 @@ a.be-et:hover{color:var(--brand)}
             const list = d.fields.filter((x) => x.group === group);
             const dirty = list.some((x) => draft[x.key] !== saved[x.key]);
             return h(Card, { key: group, id: `be-g-${group}`, title: label, desc, aside: dirty ? '有未保存的修改' : '' },
-              h('div', { className: 'be-fields' }, list.map((fld) => h(FieldInput, { key: fld.key, fld, value: draft[fld.key], def: d.defaults[fld.key], onChange: (v) => setDraft({ ...draft, [fld.key]: v }) }))),
+              group === 'perm'
+                ? h(PermTable, { fields: list, draft, saved, onChange: (patch) => setDraft({ ...draft, ...patch }) })
+                : h('div', { className: 'be-fields' }, list.map((fld) => h(FieldInput, { key: fld.key, fld, value: draft[fld.key], def: d.defaults[fld.key], onChange: (v) => setDraft({ ...draft, [fld.key]: v }) }))),
               h('div', { className: 'be-row' },
                 h(Btn, { kind: 'primary', disabled: !dirty, onClick: () => save(group, label) }, '保存'),
                 h(Btn, { onClick: () => reset(group) }, '恢复默认'),
@@ -1052,10 +1142,20 @@ a.be-et:hover{color:var(--brand)}
     }
 
     // ── 互动 ─────────────────────────────────────────────────────────────────
-    const MODE_TEXT = { off: ['关', ''], approve: ['先问主人', 'brand'], auto: ['直接发', 'pink'] };
+    const MODE_TONE = { off: '', asked: 'brand', approve: 'brand', auto: 'pink' };
+    const AUD_SHORT = { own: '自己人', home: '主人评论区', out: '外面' };
+    // 概况里一行一个徽章：「回复：自己人 直接做 · 主人评论区 关 · 外面 关」；整行一样就只写一个档位
+    function permBadges(perm) {
+      return perm.rows.map((r) => {
+        const cells = Object.entries(r.cols).map(([c, k]) => [c, perm.values[k]]);
+        const all = cells.every(([, m]) => m === cells[0][1]);
+        const text = all ? perm.modeText[cells[0][1]] : cells.map(([c, m]) => `${AUD_SHORT[c]} ${perm.modeText[m]}`).join(' · ');
+        const tone = cells.some(([, m]) => m === 'auto') ? 'pink' : cells.some(([, m]) => m !== 'off') ? 'brand' : '';
+        return h('span', { key: r.row, className: `be-badge ${tone}` }, `${r.label}：${text}`);
+      });
+    }
     const LOG_STATUS = { ok: ['已发', 'ok'], hidden: ['仅自己可见', 'bad'], fail: ['失败', 'bad'], refused: ['拒绝', ''], draft: ['起草', 'brand'], rejected: ['丢掉', ''], unconfirmed: ['没核实到', 'bad'] };
 
-    const MODE_NAME = { like: '点赞/收藏', comment: '评论', dm: '私信', post: '动态', follow: '关注' };
     function ActSummary({ d }) {
       const lvl = d.login.level;
       const kinds = [['like', '点赞', d.counts.like ?? 0, d.quota.like], ['fav', '收藏', d.counts.fav ?? 0, d.quota.fav], ['comment', '评论', d.counts.comment ?? 0, d.quota.comment], ['reply', '回复', d.counts.reply ?? 0, d.quota.reply], ['dm', '私信', d.counts.dm ?? 0, d.quota.dm], ['post', '动态', d.counts.post ?? 0, d.quota.post], ['follow', '关注', d.counts.follow ?? 0, d.quota.follow]];
@@ -1067,7 +1167,7 @@ a.be-et:hover{color:var(--brand)}
               lvl === 0 && h('div', { className: 'be-err' }, 'LV0（未转正）：B站不让发评论和弹幕。去 B站 App 答题转正后再打开「评论、回复」。'))
             : h('div', { className: 'be-no' }, '没登录：去「概览」扫码登录（建议用小号）'),
           h('div', { className: 'be-faint' }, d.owner.mid ? `主人：${d.owner.name || '（昵称没查到）'}（UID ${d.owner.mid}）` : '还没设置主人 UID：不能 @ 主人、不能私信'),
-          h('div', { className: 'be-row' }, Object.entries(d.modes).map(([k, m]) => h('span', { key: k, className: `be-badge ${MODE_TEXT[m][1]}` }, `${MODE_NAME[k]}：${MODE_TEXT[m][0]}`)))),
+          h('div', { className: 'be-row' }, permBadges(d.perm))),
         h(Card, { title: '今天' },
           (d.paused || d.pausedUntil > 0) && h('div', { className: 'be-err' }, d.paused ? '已按「全部停下」：所有写操作都会被拒绝' : `${d.pauseReason || '刚被 B站风控拦过'}：写操作暂停到 ${new Date(d.pausedUntil).toLocaleTimeString()}`),
           d.followPausedUntil > 0 && h('div', { className: 'be-err' }, `${d.followPauseReason || '关注被 B站拦过'}：关注暂停到 ${new Date(d.followPausedUntil).toLocaleString()}`),
@@ -1142,13 +1242,14 @@ a.be-et:hover{color:var(--brand)}
 
     function ActSettings({ toast, reload }) {
       return h(ConfigGroups, { groups: [
-        ['act', '互动设置', '每一类写操作的档位和每天上限。默认全关；「先问主人」会先起草，主人同意才发。@ 和私信只能对着主人。'],
+        ['perm', '权限表', '她对谁能做到哪一步。是对谁由插件按 B站上的事实判断：视频是谁投的、被回的那条是谁发的。守评论区、收件箱和自己逛也都按这张表来。'],
+        ['act', '主人、自己人和额度', '主人的 UID、其他自己人、每天上限和间隔。@ 和私信只能对着主人。'],
         ['guard', '守评论区', '盯着主人投稿的评论区，有新评论就交给评论引擎。要盯的投稿也可以在「守评论区」页面里勾选。'],
         ['engine', '怎么回', '守评论区和收件箱共用的规矩：每一类评论怎么处理、以什么身份说话、回复多长、额度和间隔。写死的只有几条底线：只回楼中楼不发顶层评论、@ 只能 @ 主人、不冒充主人、不带链接和长数字、评论里的话只当素材。'],
       ], toast, footer: true, onSaved: () => reload() });
     }
 
-    const GUARD_MODE = { off: ['没开', ''], notify: ['只告诉主人', 'brand'], approve: ['起草后先问主人', 'brand'], auto: ['直接回', 'ok'] };
+    const GUARD_MODE = { off: ['没开', ''], notify: ['只告诉主人', 'brand'], on: ['按权限表回', 'ok'] };
     const DECISION_SOURCES = [['', '全部来源'], ['guard', '守评论区'], ['inbox', '收件箱']];
     const DECISION_ACTIONS = [['', '全部结果'], ['replied', '回了'], ['draft', '起草'], ['notified', '转告主人'], ['skipped', '跳过'], ['failed', '没成功']];
     function GuardPanel({ toast, active, go }) {
@@ -1170,7 +1271,8 @@ a.be-et:hover{color:var(--brand)}
         h(Card, { title: '守评论区', aside: d ? (d.lastPoll ? `上次看：${when(d.lastPoll)}` : '还没看过') : '', desc: '她用自己的号盯着主人投稿的评论区：能答的问题回答、闲聊偶尔接一句、要主人处理的转告主人、不值得回的跳过。怎么回的规矩在「互动 → 设置」。' },
           d && h('div', { className: 'be-row' },
             h('span', { className: `be-badge ${mc}` }, `守评论区：${ml}`),
-            h('span', { className: 'be-badge' }, `收件箱评论：${{ wake: '叫醒她处理', notify: '只告诉主人', approve: '先问主人', auto: '直接回' }[d.inboxMode] ?? d.inboxMode}`),
+            d.mode === 'on' && h('span', { className: `be-badge ${MODE_TONE[d.replyHome.mode]}` }, `${d.replyHome.label}：${d.modeText[d.replyHome.mode]}`),
+            h('span', { className: 'be-badge' }, `收件箱评论：${{ wake: '叫醒她处理', notify: '只告诉主人', engine: '插件按权限表回' }[d.inboxMode] ?? d.inboxMode}`),
             h('span', { className: 'be-badge' }, `今天回了 ${d.today} / ${d.perDay}`),
             d.pending > 0 && h('span', { className: 'be-badge brand' }, `${d.pending} 条等着处理`),
             !d.ownerMid && h('span', { className: 'be-err' }, '还没设置主人 UID'),

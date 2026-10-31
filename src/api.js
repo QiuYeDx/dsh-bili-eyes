@@ -7,7 +7,7 @@ import path from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import QRCode from 'qrcode';
 import { BiliClient } from './bili-api.js';
-import { loadConfig, saveConfig, DEFAULTS, FIELDS, CONFIG_FILE, DATA_DIR, DSH_HOME } from './config.js';
+import { loadConfig, saveConfig, DEFAULTS, FIELDS, CONFIG_FILE, DATA_DIR, DSH_HOME, PERM_ROWS, AUDIENCES, MODE_TEXT, permFor } from './config.js';
 import { loadCredential, saveCredential, removeCredential, qrGenerate, qrPoll } from './credential.js';
 import { readHistory, clearHistory } from './history.js';
 import { look, lookZoom, find, usage, resetLoginCache, makeClient, InputError } from './look.js';
@@ -261,6 +261,8 @@ async function getView(view, ctx, q = new URLSearchParams()) {
     return {
       mode: cfg.guardMode,
       inboxMode: cfg.inboxReplyMode,
+      replyHome: permFor(cfg, 'reply', 'home'),
+      modeText: MODE_TEXT,
       ownerMid: cfg.ownerMid,
       videos: videoList(cfg, st).map((v) => ({ ...v, note: st.notes[v.bvid] ?? '' })),
       videosAt: st.guard.videosAt,
@@ -285,7 +287,7 @@ async function getView(view, ctx, q = new URLSearchParams()) {
     return {
       login,
       owner: { mid: cfg.ownerMid, name: owner },
-      modes: { like: cfg.likeMode, comment: cfg.commentMode, dm: cfg.dmMode, post: cfg.postMode, follow: cfg.followMode },
+      perm: { rows: PERM_ROWS, audiences: AUDIENCES, modeText: MODE_TEXT, values: Object.fromEntries(FIELDS.filter((f) => f.group === 'perm').map((f) => [f.key, cfg[f.key]])) },
       counts: todayCounts(entries),
       quota: { like: cfg.likePerDay, fav: cfg.favPerDay, comment: cfg.commentPerDay, reply: cfg.replyPerDay, dm: cfg.dmPerDay, post: cfg.postPerDay, follow: cfg.followPerDay },
       favs: ownFavs(readAudit(2000)),

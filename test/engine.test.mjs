@@ -7,7 +7,7 @@ import path from 'node:path';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bili-eyes-engine-'));
 process.env.DSH_HOME = tmp;
-const { DEFAULTS } = await import('../src/config.js');
+const { DEFAULTS, migrateLegacy } = await import('../src/config.js');
 const { parseVerdicts, plan, fitLength, processBatch, reportLines, sendReport, loadEngine, saveEngine, engineCount, buildPrompt } = await import('../src/engine.js');
 const { videoList, togglePatch, bvList } = await import('../src/guard.js');
 const { pollInbox, engineItem } = await import('../src/interact.js');
@@ -15,7 +15,8 @@ const { saveCredential } = await import('../src/credential.js');
 const { loadInbox, saveInbox, feedItem, byWake } = await import('../src/inbox.js');
 const { request: realRequest, readAudit } = await import('../src/act.js');
 
-const cfgOf = (o = {}) => ({ ...DEFAULTS, ownerMid: 42, ...o });
+// 用 0.6.0 的档位写法（commentMode…）也行：先迁移成权限表
+const cfgOf = (o = {}) => ({ ...DEFAULTS, ownerMid: 42, ...migrateLegacy(o) });
 const NOW = Date.UTC(2026, 9, 31, 6, 0, 0);
 const item = (k, o = {}) => ({ key: `r${k}`, source: 'guard', oid: '100', type: 1, root: `r${k}`, parent: `r${k}`, rpid: `r${k}`, at: NOW - 60_000, user: { mid: 1000 + k, name: `路人${k}` }, text: `评论${k}`, bvid: 'BV1xx411c7mD', title: '主人的视频', ...o });
 const askWith = (arr) => async () => JSON.stringify(arr);
@@ -59,7 +60,7 @@ test('提示词：身份、称呼、口吻、字数和问答备忘都拼进去',
   assert.match(p.user, /\[1\] 路人1：评论1/);
 });
 
-test('处理一批：主人、自己、太久的直接跳过；问题直接回，带上引擎自己的档位、额度和间隔', async () => {
+test('处理一批：主人、自己、太久的直接跳过；问题直接回，带上对谁、额度和间隔', async () => {
   const calls = [];
   const fakeRequest = async (req) => { calls.push(req); return { status: 'sent', text: '回复发出去了' }; };
   const st = freshSt();
@@ -71,7 +72,7 @@ test('处理一批：主人、自己、太久的直接跳过；问题直接回�
   assert.match(by.r3.why, /超过 72 小时/);
   assert.equal(by.r4.action, 'replied');
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].modeKey, 'guardMode');
+  assert.equal(calls[0].audience, 'home', '守评论区都在主人的投稿下');
   assert.equal(calls[0].maxPerParent, DEFAULTS.engRounds);
   assert.equal(calls[0].gapSeconds, DEFAULTS.engGapSeconds);
   assert.equal(calls[0].quota.max, DEFAULTS.engPerDay);
@@ -156,20 +157,21 @@ test('引擎单独的额度：只数引擎回的、今天的', () => {
   assert.equal(engineCount(entries, NOW), 2);
 });
 
-test('act.request：引擎带的档位、单独额度和每楼次数生效', async () => {
+test('act.request：权限表那格、引擎的单独额度和每楼次数生效', async () => {
   const auditFile = path.join(tmp, 'a-eng.jsonl'); const draftsFile = path.join(tmp, 'd-eng.json');
   const client = { addComment: async () => ({ rpid_str: '9' }) };
-  const base = { kind: 'reply', payload: { oid: '1', type: 1, root: '5', parent: '5', text: '好呀' }, preview: 'x', target: { oid: '1', root: '5', parent: '5', engine: 'guard' }, modeKey: 'guardMode', modeLabel: '守评论区' };
+  const base = { kind: 'reply', payload: { oid: '1', type: 1, root: '5', parent: '5', text: '好呀' }, preview: 'x', target: { oid: '1', root: '5', parent: '5', engine: 'guard' }, audience: 'home' };
   const cfg = cfgOf({ commentMode: 'off', guardMode: 'off' });
   const r1 = await realRequest(base, { cfg, client, via: 'background', auditFile, draftsFile });
-  assert.match(r1.text, /守评论区/);
+  assert.match(r1.text, /回复 · 主人评论区里的别人」是关着的/);
+  assert.match(r1.text, /不用起草/);
   const r2 = await realRequest({ ...base, quota: { max: 0, count: () => 0, label: '守评论区回复' } }, { cfg: cfgOf({ guardMode: 'auto' }), client, via: 'background', auditFile, draftsFile });
   assert.match(r2.text, /守评论区回复」额度用完/);
   const r3 = await realRequest({ ...base, maxPerParent: 0 }, { cfg: cfgOf({ guardMode: 'auto' }), client, via: 'background', auditFile, draftsFile });
   assert.match(r3.text, /回过 0 次/);
   const r4 = await realRequest(base, { cfg: cfgOf({ guardMode: 'approve' }), client, via: 'background', auditFile, draftsFile });
   assert.equal(r4.status, 'draft');
-  assert.equal(r4.draft.modeKey, 'guardMode');
+  assert.equal(r4.draft.modeKey, 'permReplyHome');
 });
 
 test('盯哪些投稿：新投稿自动加入、天数、手动加、排除；勾选改的是配置', () => {
@@ -243,7 +245,7 @@ test('收件箱：安静时段 hold 照查不处理，skip 不查；评论交给
   const day = new Date(NOW); day.setHours(9, 0, 0, 0);
   const r2 = await pollInbox({ cfg: { ...qcfg, inboxQuietMode: 'hold', inboxChatChance: 100 }, now: day.getTime(), getAsk, deps });
   assert.equal(r2.handled, 1);
-  assert.equal(calls[0].modeKey, 'inboxReplyMode');
+  assert.deepEqual(calls[0].audience, ['home', 'out'], '查不到是谁的视频：两格里取严的');
   assert.equal(calls[0].payload.inbox, 'r1');
   const it = loadInbox().items[0];
   assert.equal(it.status, 'done');
