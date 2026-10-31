@@ -134,6 +134,28 @@ a.be-et:hover{color:var(--brand)}
 .be-toast{position:sticky;bottom:12px;align-self:flex-start;padding:8px 14px;border-radius:var(--rs);font-size:13px;background:var(--t1);color:var(--b1);box-shadow:0 4px 14px rgba(0,0,0,.18)}
 .be-toast.bad{background:var(--bad);color:#fff}
 .be-empty{color:var(--t3);font-size:13px;padding:6px 0}
+.be-hver{appearance:none;font:inherit;font-size:12px;line-height:18px;padding:0 8px;border-radius:999px;border:1px solid var(--bd);background:var(--b2);color:var(--t3);cursor:pointer;white-space:nowrap}
+.be-hver:hover{color:var(--t1)}
+.be-hver.new{color:var(--brand);border-color:color-mix(in srgb,var(--brand) 35%,transparent);background:color-mix(in srgb,var(--brand) 8%,transparent)}
+.be-hver:focus-visible{outline:2px solid color-mix(in srgb,var(--brand) 55%,transparent);outline-offset:1px}
+.be-akv{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 16px;margin:0;font-size:13px}
+.be-akv dt{color:var(--t3)}
+.be-akv dd{margin:0;min-width:0;overflow-wrap:anywhere;color:var(--t1)}
+.be-akv a,.be-md a,.be-up a,.be-card-h a{color:var(--brand);text-decoration:none}.be-akv a:hover,.be-md a:hover,.be-up a:hover,.be-card-h a:hover{text-decoration:underline}
+.be-up{display:flex;flex-direction:column;gap:8px;padding:12px;border-radius:var(--rs);background:color-mix(in srgb,var(--brand) 7%,transparent);border:1px solid color-mix(in srgb,var(--brand) 25%,transparent);font-size:13px}
+.be-up b{color:var(--brand);font-weight:600}
+.be-up code,.be-md code{font-family:var(--ds-font-family-code,ui-monospace,Consolas,monospace);font-size:12px;padding:0 4px;border-radius:4px;background:var(--b2)}
+.be-cmd{display:flex;align-items:center;gap:8px;padding:5px 6px 5px 10px;border-radius:var(--rs);border:1px solid var(--bd);background:var(--b1)}
+.be-cmd code{flex:1;min-width:0;overflow-wrap:anywhere;padding:0;background:none;font-size:12.5px}
+.be-qq{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.be-qq b{font-size:22px;font-weight:600;letter-spacing:.5px;font-variant-numeric:tabular-nums}
+.be-md{display:flex;flex-direction:column;gap:6px;font-size:13px;line-height:1.6;color:var(--t1)}
+.be-md + .be-md{margin-top:6px;padding-top:12px;border-top:1px solid color-mix(in srgb,var(--bd) 60%,transparent)}
+.be-md h4{margin:4px 0 0;font-size:13px;font-weight:600;color:var(--t2)}
+.be-md p{margin:0}
+.be-md ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
+.be-mdv{display:flex;align-items:baseline;gap:8px;font-weight:600;font-size:14px}
+.be-mdv span{font-weight:400;font-size:12px;color:var(--t3)}
 .be-ok{color:var(--ok);font-size:13px}.be-no{color:var(--bad);font-size:13px}
 .be-page{display:flex;flex-direction:column;gap:16px;min-width:0}
 .be-page[hidden]{display:none}
@@ -718,12 +740,125 @@ a.be-et:hover{color:var(--brand)}
             h('div', null, h(Btn, { onClick: () => api.post('openFolder', { which: 'data' }).then(() => toast('已在文件管理器里打开'), (e) => toast(e.message, true)) }, '打开数据文件夹')));
         }));
     }
+    // ── 关于 ─────────────────────────────────────────────────────────────────
+    // 复制：DSH 的页面里 clipboard 一般能用；不能用时退回 execCommand
+    function copyText(text) {
+      const fallback = () => {
+        const ta = document.createElement('textarea');
+        ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        const ok = document.execCommand('copy'); ta.remove();
+        if (!ok) throw new Error('复制失败');
+      };
+      return navigator.clipboard?.writeText ? navigator.clipboard.writeText(text).catch(fallback) : Promise.resolve().then(fallback);
+    }
+    // CHANGELOG 的一小段 Markdown：### 小标题、- 列表、**粗体**、`代码`、[链接](url)
+    const mdInline = (s) => s.split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)\s]+\))/).filter(Boolean).map((t, i) => {
+      if (t.startsWith('**') && t.endsWith('**') && t.length > 4) return h('b', { key: i }, t.slice(2, -2));
+      if (t.startsWith('`') && t.endsWith('`') && t.length > 2) return h('code', { key: i }, t.slice(1, -1));
+      const m = t.match(/^\[([^\]]+)\]\(([^)\s]+)\)$/);
+      if (m && /^https?:/.test(m[2])) return h('a', { key: i, href: m[2], target: '_blank', rel: 'noreferrer' }, m[1]);
+      return t;
+    });
+    function Md({ lines }) {
+      const out = []; let list = null;
+      lines.forEach((l, i) => {
+        if (/^\s*- /.test(l)) { if (!list) { list = []; out.push(h('ul', { key: i }, list)); } list.push(h('li', { key: i }, mdInline(l.replace(/^\s*- /, '')))); return; }
+        list = null;
+        out.push(l.startsWith('### ') ? h('h4', { key: i }, l.slice(4)) : h('p', { key: i }, mdInline(l)));
+      });
+      return out;
+    }
+
+    // 顶部标题旁的版本号：有新版本时写出来，点一下去「设置 → 关于」
+    function VersionBadge({ go }) {
+      const st = useView('version');
+      // 「关于」里手动查完会发 be-update，跟着刷新
+      useEffect(() => { const f = () => st.reload(); window.addEventListener('be-update', f); return () => window.removeEventListener('be-update', f); }, [st.reload]);
+      const u = st.data?.update;
+      if (!u) return null;
+      return h('button', { type: 'button', className: `be-hver${u.newer ? ' new' : ''}`, title: u.newer ? `当前 v${u.current}，npm 上有 v${u.latest}` : '关于、检查更新', onClick: () => go('settings', 'about') },
+        u.newer ? `v${u.current} · 有新版本 v${u.latest}` : `v${u.current}`);
+    }
+
+    const LINE = (label, value) => [h('dt', { key: `${label}-t` }, label), h('dd', { key: `${label}-d` }, value)];
+    const ext = (href, text) => h('a', { href, target: '_blank', rel: 'noreferrer' }, text);
+    // a 比 b 新（只比 x.y.z）
+    const verNewer = (a, b) => { const p = (v) => String(v).split('-')[0].split('.').map(Number); const x = p(a); const y = p(b); for (let i = 0; i < 3; i += 1) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); return false; };
+    function AboutPage({ toast, active }) {
+      const st = useView('about');
+      useRefreshOnShow(active, st.reload);
+      const [up, setUp] = useState(null);         // 这次打开后查到的结果
+      const [busy, setBusy] = useState(false);
+      const check = (quiet) => {
+        setBusy(true);
+        api.post('checkUpdate').then((r) => {
+          setUp(r.update);
+          window.dispatchEvent(new Event('be-update'));
+          if (!quiet) toast(r.update.error || (r.update.newer ? `有新版本 v${r.update.latest}` : '已经是最新版本'), Boolean(r.update.error));
+        }, (e) => { if (!quiet) toast(e.message, true); }).finally(() => setBusy(false));
+      };
+      // 打开时上次检查已经过期（12 小时）就自己查一次
+      useEffect(() => { if (st.data?.update.stale && !up && !busy) check(true); }, [st.data]);
+      const copy = (text, what) => copyText(text).then(() => toast(`已复制${what}`), () => toast('复制失败，请手动选中复制', true));
+      return h(Loading, { state: st }, (d) => {
+        const u = up ?? d.update;
+        const local = d.install.kind === 'local';
+        const cmd = `dsh plugin --profile desktop add ${d.name}@latest`;
+        const date = (t) => new Date(t).toLocaleDateString();
+        const status = busy
+          ? h('div', { className: 'be-row be-faint' }, h('span', { className: 'be-spin' }), '正在检查 npm 上的最新版本…')
+          : u.error
+            ? h('div', { className: 'be-no' }, u.error, u.latest ? `（上次查到的最新是 v${u.latest}）` : '')
+            : u.newer
+              ? h('div', { className: 'be-up' },
+                h('div', null, h('b', null, `有新版本 v${u.latest}`), u.publishedAt ? `，${date(u.publishedAt)} 发布。` : '。', ext(`${d.repo}/releases`, '看看更新了什么')),
+                local
+                  ? h('div', null, '这份是从源码目录装的：在插件目录里 ', h('code', null, 'git pull'), ' 再 ', h('code', null, 'npm ci'), '，然后彻底重启 DSH。')
+                  : h(React.Fragment, null,
+                    h('div', null, '在 DSH「设置 → 插件」里更新，或者在终端运行：'),
+                    h('div', { className: 'be-cmd' }, h('code', null, cmd), h(ActBtn, { onClick: () => copy(cmd, '命令') }, '复制')),
+                    h('div', { className: 'be-faint' }, '装完彻底重启 DSH。接了 dsh-qq 的，新版本加了工具时「收件箱 → 设置 → 门卫」会提示再点一次「一键适配」。')))
+              : u.latest
+                ? h('div', { className: 'be-ok' }, `✓ 已经是最新版本${verNewer(d.version, u.latest) ? `（比 npm 上的 v${u.latest} 还新，是还没发布的开发版）` : ''}`)
+                : h('div', { className: 'be-faint' }, '还没检查过更新');
+        return h(React.Fragment, null,
+          h(Card, { title: '版本和更新' },
+            h('dl', { className: 'be-akv' },
+              LINE('当前版本', `v${d.version}`),
+              LINE('npm 最新', u.latest ? `v${u.latest}${u.publishedAt ? `（${date(u.publishedAt)} 发布）` : ''}` : '—'),
+              LINE('安装方式', local ? '源码目录（link:），改了代码重启 DSH 生效' : 'npm 包'),
+              LINE('插件目录', h('span', { className: 'be-faint' }, d.install.dir)),
+              LINE('Node', d.node)),
+            status,
+            h('div', { className: 'be-row' },
+              h(Btn, { onClick: () => check(false), disabled: busy }, busy ? '检查中…' : '检查更新'),
+              u.checkedAt > 0 && h('span', { className: 'be-faint' }, `上次检查：${when(u.checkedAt)}`))),
+          h('div', { className: 'be-grid' },
+            h(Card, { title: '作者和项目' },
+              h('dl', { className: 'be-akv' },
+                LINE('作者', ext(d.authorUrl, d.author)),
+                LINE('开源仓库', ext(d.repo, d.repo.replace(/^https:\/\//, ''))),
+                LINE('npm', ext(d.npm, d.name)),
+                LINE('更新记录', h(React.Fragment, null, ext(`${d.repo}/blob/main/CHANGELOG.md`, 'CHANGELOG'), ' · ', ext(`${d.repo}/releases`, 'Releases'))),
+                LINE('问题反馈', ext(d.bugs, 'GitHub Issues')),
+                LINE('许可证', d.license))),
+            h(Card, { title: 'QQ 交流群', desc: '用法交流、问题反馈、新版本消息都在群里。QQ 里搜群号就能加。' },
+              h('div', { className: 'be-qq' }, h('b', null, d.qqGroup), h(Btn, { onClick: () => copy(d.qqGroup, '群号') }, '复制群号')))),
+          d.changelog.length > 0 && h(Card, { title: '这个版本更新了什么', aside: ext(`${d.repo}/blob/main/CHANGELOG.md`, '全部更新记录') },
+            d.changelog.map((c) => h('div', { key: c.version || 'next', className: 'be-md' },
+              h('div', { className: 'be-mdv' }, c.version ? `v${c.version}` : '还没发布的改动', h('span', null, c.version ? c.date : '源码目录里有、npm 上还没有')),
+              h(Md, { lines: c.lines })))));
+      });
+    }
+
     const groupPanel = (groups, extra) => function Panel(props) { return h(React.Fragment, null, extra && h(extra, props), h(ConfigGroups, { groups, toast: props.toast, footer: true })); };
     const SETTINGS_SUBS = [
       ['watch', '看视频', groupPanel([GROUPS[0]])],
       ['limits', '限额', groupPanel([GROUPS[1]])],
       ['storage', '存储', groupPanel([GROUPS[2]], CacheCard)],
       ['asr', '语音识别', AsrCard],
+      ['about', '关于', AboutPage],
     ];
     function SettingsPage({ toast, active, sub, setSub }) {
       return h(SubPages, { items: SETTINGS_SUBS, sub, setSub, active, props: { toast } });
@@ -1102,7 +1237,7 @@ a.be-et:hover{color:var(--brand)}
       useEffect(() => { try { localStorage.setItem('dsh-bili-eyes:tab', tab); localStorage.setItem('dsh-bili-eyes:subs', JSON.stringify(subs)); } catch { /* 忽略 */ } }, [tab, subs]);
       const go = useCallback((t, s) => { setTab(t); if (s) setSubs((x) => ({ ...x, [t]: s })); }, []);
       return h('div', { className: 'be' },
-        h('header', { className: 'be-head' }, h('h2', null, 'B站伙伴'), h('p', null, '她的 B站：看视频、逛 B站、收件箱，以及点赞、评论、收藏、关注这些写操作（默认全关，在「互动 → 设置」里逐项打开）。这里的改动立即生效。')),
+        h('header', { className: 'be-head' }, h('h2', null, 'B站伙伴'), h(VersionBadge, { go }), h('p', null, '她的 B站：看视频、逛 B站、收件箱，以及点赞、评论、收藏、关注这些写操作（默认全关，在「互动 → 设置」里逐项打开）。这里的改动立即生效。')),
         h('nav', { className: 'be-tabs', role: 'tablist' }, TABS.map(([id, label]) => h('button', { key: id, type: 'button', role: 'tab', className: 'be-tab', 'aria-selected': tab === id, onClick: () => setTab(id) }, label))),
         // 页签都挂着、只是隐藏：试看跑到一半切走再回来，结果还在
         TABS.map(([id, , Page]) => h('div', { key: id, className: 'be-page', hidden: tab !== id }, h(PageBoundary, null, h(Page, { toast, go, active: tab === id, sub: subs[id], setSub: (s) => setSubs((x) => ({ ...x, [id]: s })) })))),

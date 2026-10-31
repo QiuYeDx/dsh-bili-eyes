@@ -28,6 +28,7 @@ import { asrView, saveAsr, clearAsr, testAsr } from './asr-config.js';
 import { patchStatus, applyPatches } from './adapters/dsh-qq-patch.js';
 import { mediaBins, mediaDirOf, resetFfmpegCheck } from './media.js';
 import { installFfmpeg, installState } from './ffmpeg-fetch.js';
+import { updateState, checkUpdate, checkUpdateIfStale, installInfo, changelogFor, QQ_GROUP } from './update.js';
 
 export const API_ROUTE = '/api/bili-eyes';
 export const TOOL_NAMES = ALL_TOOLS;
@@ -202,6 +203,18 @@ async function getView(view, ctx, q = new URLSearchParams()) {
       configFile: CONFIG_FILE,
     };
   }
+  // 顶部的版本角标：只读上次检查的结果，过期了在后台再查
+  if (view === 'version') { checkUpdateIfStale(); return { update: updateState() }; }
+  if (view === 'about') {
+    const install = installInfo();
+    const repo = String(PKG.repository?.url ?? '').replace(/^git\+/, '').replace(/\.git$/, '');
+    return {
+      name: PKG.name, version: PKG.version, author: PKG.author, authorUrl: repo.replace(/^(https:\/\/github\.com\/[^/]+).*$/, '$1'), license: PKG.license, qqGroup: QQ_GROUP,
+      repo, bugs: PKG.bugs?.url ?? `${repo}/issues`, npm: `https://www.npmjs.com/package/${PKG.name}`,
+      install, node: process.version, update: updateState(),
+      changelog: changelogFor(PKG.version, { withUnreleased: install.kind === 'local' }),
+    };
+  }
   if (view === 'history') {
     const from = daysSince(q); const kind = pick(q, 'kind'); const source = pick(q, 'source');
     const all = readHistory(1000).filter((e) => e.at >= from && (!kind || e.kind === kind) && (!source || e.source === source));
@@ -344,6 +357,7 @@ async function postAction(body, ctx) {
       return { cleared: clearDir(dir) };
     }
     case 'clearHistory': clearHistory(); return {};
+    case 'checkUpdate': return { update: await checkUpdate() };
     case 'openFolder': {
       const dir = body.which === 'data' ? DATA_DIR : CACHE_DIRS[body.which]?.(cfg);
       if (!dir) throw new Error('这个目录用的是默认位置');
