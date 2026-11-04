@@ -142,7 +142,7 @@ export class BiliClient {
   }
 
   // 串行 + 最小间隔：B站对匿名请求限流很紧（412）
-  async request(url, { raw = false, method = 'GET', form = null, json = null } = {}) {
+  async request(url, { raw = false, method = 'GET', form = null, json = null, multipart = null, timeoutMs = 12_000 } = {}) {
     const run = async () => {
       const wait = this.lastAt + this.minIntervalMs - Date.now();
       if (wait > 0) await new Promise((r) => setTimeout(r, wait));
@@ -155,8 +155,9 @@ export class BiliClient {
       let body;
       if (form) { headers['content-type'] = 'application/x-www-form-urlencoded'; body = new URLSearchParams(form).toString(); }
       else if (json) { headers['content-type'] = 'application/json'; body = JSON.stringify(json); }
+      else if (multipart) body = multipart;   // 函数，返回 FormData：content-type（带 boundary）由 fetch 自己设；每次请求新建一份
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const r = await this.fetchImpl(url, { method, headers, body, signal: AbortSignal.timeout(12_000) });
+        const r = await this.fetchImpl(url, { method, headers, body: typeof body === 'function' ? body() : body, signal: AbortSignal.timeout(timeoutMs) });
         if (r.status === 412 && attempt === 0 && method === 'GET') { await new Promise((res) => setTimeout(res, 2500)); continue; }
         if (!r.ok) throw new BiliError(`B站接口 HTTP ${r.status}`, r.status);
         if (raw) return Buffer.from(await r.arrayBuffer());
@@ -439,12 +440,38 @@ export class BiliClient {
     return { like: d?.like === true, favorite: d?.favorite === true, coin: Number(d?.coin) || 0, attention: d?.attention === true };
   }
 
-  /** 发评论；给 root（和 parent）就是楼中楼。atNameToMid: {昵称: mid}，让正文里的「@昵称」变成真的 @。 */
-  addComment({ oid, type = 1, message, root = 0, parent = 0, atNameToMid = null }) {
+  /**
+   * 上传一张图到 B站图床（动态的上传接口，评论带图也用它）。返回 {url, width, height, size}（size 是 KB）。
+   * 字段：file_up + biz + category=daily + csrf（少了 category、字段名写成 file 都会返回 4100001）。
+   */
+  async uploadImage(buf, { name = 'sticker.png', type = 'image/png' } = {}) {
+    const csrf = this.csrf();
+    const d = await this.request('https://api.bilibili.com/x/dynamic/feed/draw/upload_bfs', {
+      method: 'POST',
+      timeoutMs: 60_000,
+      multipart: () => {
+        const fd = new FormData();
+        fd.append('file_up', new Blob([buf], { type }), name);
+        fd.append('biz', 'new_dyn');
+        fd.append('category', 'daily');
+        fd.append('csrf', csrf);
+        return fd;
+      },
+    });
+    if (!d?.image_url) throw new BiliError('上传图片没拿到地址', 'no-url');
+    return { url: String(d.image_url), width: Number(d.image_width) || 0, height: Number(d.image_height) || 0, size: Number(d.img_size) || Math.round(buf.length / 102.4) / 10 };
+  }
+
+  /**
+   * 发评论；给 root（和 parent）就是楼中楼。atNameToMid: {昵称: mid}，让正文里的「@昵称」变成真的 @。
+   * pictures：[{url, width, height, size}]（uploadImage 的结果）。B站要的是 JSON 字符串，传成数组不报错但图会丢。
+   */
+  addComment({ oid, type = 1, message, root = 0, parent = 0, atNameToMid = null, pictures = null }) {
     // 和网页端发评论时带的字段一致（少了这些更像脚本）
     const form = { oid, type, message, plat: 1, ordering: 'heat', jsonp: 'jsonp', gaia_source: 'main_web', statistics: JSON.stringify({ appId: 100, platform: 5 }), csrf: this.csrf(), csrf_token: this.csrf() };
     if (root && String(root) !== '0') { form.root = root; form.parent = parent && String(parent) !== '0' ? parent : root; }
     if (atNameToMid && Object.keys(atNameToMid).length) form.at_name_to_mid = JSON.stringify(atNameToMid);
+    if (pictures?.length) form.pictures = JSON.stringify(pictures.map((p) => ({ img_src: p.url, img_width: p.width, img_height: p.height, img_size: p.size })));
     return this.signedPost('https://api.bilibili.com/x/v2/reply/add', form);
   }
 

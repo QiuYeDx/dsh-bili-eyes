@@ -12,6 +12,7 @@ import { DATA_DIR, loadConfig } from './config.js';
 import { clip } from './look.js';
 import { surf, parseJsonArray } from './surf.js';
 import { request, checkText } from './act.js';
+import { emoteGuide, tidyEmotes, hasWords, promptLine } from './emote.js';
 import { videoAudience } from './audience.js';
 import { notify, gateKind } from './gate.js';
 import { ownerName, writeClient } from './interact.js';
@@ -141,7 +142,8 @@ export async function autoSurfOnce({ cfg = loadConfig(), ask, log = () => {}, no
     if (!maxComments && !ways.length) { rec.ok = true; return rec; }
 
     const material = items.map((x, i) => `【${i + 1}】${x.title} —— ${x.author ?? ''}\n${x.note ?? ''}`).join('\n\n');
-    const sys = DECIDE_SYSTEM.replace('{voice}', cfg.autoSurfVoice || '友善、口语化、像个爱刷 B站 的年轻人').replace('{maxComments}', String(maxComments)).replace('{taste}', cfg.surfTaste || '（没写）');
+    const sys = DECIDE_SYSTEM.replace('{voice}', cfg.autoSurfVoice || '友善、口语化、像个爱刷 B站 的年轻人').replace('{maxComments}', String(maxComments)).replace('{taste}', cfg.surfTaste || '（没写）')
+      + promptLine(emoteGuide(cfg, { forTool: false }));
     const dec = parseDecision(await ask({ system: sys, user: `${material}\n\n（逛的过程：${clip(r.text, 1500)}）`, maxTokens: 700 }), items.length);
     const comments = dec.comments.slice(0, maxComments);
     const rec2 = ways.length ? dec.recommend : null;
@@ -159,7 +161,9 @@ export async function autoSurfOnce({ cfg = loadConfig(), ask, log = () => {}, no
     for (const [i, c] of byVideo) {
       const x = items[i - 1];
       try {
-        const text = checkText('comment', c.text, { ownerName: name, mention: c.mention });   // 和工具一样的正文检查
+        const tidy = tidyEmotes(c.text, cfg).text;   // 去掉不能用的表情
+        if (!hasWords(tidy)) throw new Error('顶层评论要有字，不能只发表情');
+        const text = checkText('comment', tidy, { ownerName: name, mention: c.mention });   // 和工具一样的正文检查
         const v = await client.view({ bvid: x.bvid });
         const res = await d.request({ kind: 'comment', payload: { oid: String(v.aid), type: 1, root: '0', parent: '0', text, ...(c.mention ? { atNameToMid: { [name]: cfg.ownerMid } } : {}) }, preview: `在《${clip(x.title, 30)}》下评论：${clip(text, 60)}`, target: { oid: String(v.aid), type: 1, root: '0', parent: '0', bvid: x.bvid, title: x.title, url: `https://www.bilibili.com/video/${x.bvid}`, to: c.mention ? name : '' }, audience: videoAudience(cfg, v.owner?.mid) }, opt);
         rec.comments.push({ bvid: x.bvid, title: x.title, text, mention: c.mention, status: res.status, result: clip(res.text, 120) });

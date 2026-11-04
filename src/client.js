@@ -29,7 +29,7 @@ color:var(--t1);font-size:14px;line-height:1.55;display:flex;flex-direction:colu
 .be-tab{appearance:none;border:0;background:none;color:var(--t2);padding:0 12px;font:inherit;font-size:14px;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;transition:color .15s,border-color .15s}
 .be-tab:hover{color:var(--t1)}
 .be-tab[aria-selected=true]{color:var(--t1);border-bottom-color:var(--brand);font-weight:600}
-.be-subbar{position:sticky;top:var(--be-nav-h);z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin:-16px 0;padding:12px 0;background:var(--be-page)}
+.be-subbar{contain:inline-size;position:sticky;top:var(--be-nav-h);z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin:-16px 0;padding:12px 0;background:var(--be-page)}
 .be-subbar::after{content:"";position:absolute;left:0;right:0;top:100%;height:10px;background:linear-gradient(var(--be-page),transparent);pointer-events:none;opacity:0;transition:opacity .15s}
 .be-subbar.under::after{opacity:1}
 .be-jump{margin-left:auto;flex:none;display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--t3)}
@@ -158,6 +158,24 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
 .be-gp-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .be-gp-row .be-input{flex:0 1 150px;min-width:0}
 .be-gp-row .be-select{flex:0 1 180px;min-width:0}
+.be-emo-pkgs{display:flex;flex-direction:column;border:1px solid var(--bd);border-radius:8px;overflow:hidden}
+.be-emo-pkg+.be-emo-pkg{border-top:1px solid var(--bd)}
+.be-emo-ph{display:flex;align-items:center;gap:10px;padding:8px 12px;flex-wrap:wrap}
+.be-emo-ph .be-switch{min-width:0;flex:1 1 160px}
+.be-emo-ph .be-meta{font-size:12px;color:var(--t3)}
+.be-emo-grid{display:flex;flex-wrap:wrap;gap:4px;padding:4px 12px 12px}
+.be-emo{display:inline-flex;align-items:center;justify-content:center;min-width:36px;height:36px;padding:2px;border:1px solid transparent;border-radius:6px;background:none;color:var(--t1);font-size:12px;cursor:pointer;opacity:.55}
+.be-emo:hover{background:var(--b2);opacity:1}
+.be-emo.on{opacity:1;border-color:color-mix(in srgb,var(--brand) 55%,transparent);background:color-mix(in srgb,var(--brand) 10%,transparent)}
+.be-emo img{width:28px;height:28px;object-fit:contain}
+.be-emo.big{height:46px}
+.be-emo.big img{width:40px;height:40px;background:#fff;border-radius:4px}
+.be-emo:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
+.be-emi{height:1.35em;width:auto;vertical-align:-.3em;margin:0 1px}
+.be-emi.big{height:2.6em;vertical-align:middle;background:#fff;border-radius:4px}
+.be-stk{display:flex;gap:12px;align-items:flex-start}
+.be-stk img{width:56px;height:56px;object-fit:contain;border-radius:6px;background:var(--b2);flex:none}
+.be-stale{padding:10px 12px;border-radius:8px;border:1px solid color-mix(in srgb,var(--brand) 35%,transparent);background:color-mix(in srgb,var(--brand) 8%,transparent);color:var(--t1);font-size:13px;margin-bottom:12px}
 @container (max-width:520px){
 .be-pm-grid{grid-template-columns:1fr;row-gap:0}
 .be-pm-grid>.hd{display:none}
@@ -901,8 +919,11 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
           bad && h('div', { className: 'be-no' }, '群号是 5~12 位数字')));
     }
 
-    /** 几组设置项。groups: [[分组, 标题, 说明]]；actions: {分组: (保存后的配置) => 额外按钮} */
-    function ConfigGroups({ groups, toast, actions = {}, footer = false, onSaved }) {
+    /**
+     * 几组设置项。groups: [[分组, 标题, 说明]]；actions: {分组: (保存后的配置) => 额外按钮}
+     * render: {分组: ({list, draft, saved, set, d}) => 自己画这一组的字段}；savedText(分组, 标题) 改保存后的提示；footerText 改页脚
+     */
+    function ConfigGroups({ groups, toast, actions = {}, footer = false, onSaved, render = {}, savedText, footerText }) {
       const st = useView('config');
       const report = useContext(GroupsCtx);
       const toc = groups.length > 1 ? groups.map(([g, l]) => [g, l]) : null;
@@ -915,15 +936,16 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
         const save = (group, label) => {
           const patch = {};
           for (const fld of d.fields.filter((x) => x.group === group)) patch[fld.key] = draft[fld.key];
-          api.post('saveConfig', { config: patch }).then((r) => { setDraft(r.config); setSaved(r.config); toast(`${label}已保存，马上生效`); onSaved?.(r.config); }, (e) => toast(e.message, true));
+          api.post('saveConfig', { config: patch }).then((r) => { setDraft(r.config); setSaved(r.config); toast(savedText?.(group, label) ?? `${label}已保存，马上生效`); onSaved?.(r.config, group); }, (e) => toast(e.message, true));
         };
-        const reset = (group) => api.post('resetConfig', { group }).then((r) => { setDraft(r.config); setSaved(r.config); toast('已恢复默认'); onSaved?.(r.config); }, (e) => toast(e.message, true));
+        const reset = (group) => api.post('resetConfig', { group }).then((r) => { setDraft(r.config); setSaved(r.config); toast(savedText ? `已恢复默认。${savedText(group, '')}` : '已恢复默认'); onSaved?.(r.config, group); }, (e) => toast(e.message, true));
         return h(React.Fragment, null,
           groups.map(([group, label, desc]) => {
             const list = d.fields.filter((x) => x.group === group);
             const dirty = list.some((x) => draft[x.key] !== saved[x.key]);
             return h(Card, { key: group, id: `be-g-${group}`, title: label, desc, aside: dirty ? '有未保存的修改' : '' },
-              group === 'perm'
+              render[group] ? render[group]({ list, draft, saved, d, set: (patch) => setDraft({ ...draft, ...patch }) })
+              : group === 'perm'
                 ? h(PermTable, { fields: list, draft, saved, onChange: (patch) => setDraft({ ...draft, ...patch }) })
                 : group === 'ask'
                   ? h(React.Fragment, null,
@@ -937,7 +959,7 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
                 h(Btn, { onClick: () => reset(group) }, '恢复默认'),
                 actions[group]?.(saved)));
           }),
-          footer && h('div', { className: 'be-faint' }, `保存后立即生效，不用重启 DSH。配置文件：${d.configFile}（只记和默认值不同的项）`));
+          footer && h('div', { className: 'be-faint' }, `${footerText ?? '保存后立即生效，不用重启 DSH。'}配置文件：${d.configFile}（只记和默认值不同的项）`));
       });
     }
 
@@ -1343,7 +1365,7 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
           status: x.expired ? ['已过期', 'dim'] : ['等主人同意', 'brand'], at: x.createdAt, quote: true,
           meta: [`草稿 #${x.id}`, x.where],
           actions: !x.expired && [h(ActBtn, { key: 's', kind: 'primary', onClick: () => draftDo(x.id, 'send') }, '同意并发出'), h(ActBtn, { key: 'd', onClick: () => draftDo(x.id, 'drop') }, '丢掉')],
-        }, x.preview)));
+        }, h(EmoteText, { text: x.preview }))));
     }
 
     const LOG_KINDS = [['', '全部操作'], ['like', '点赞'], ['fav', '收藏'], ['unfav', '取消收藏'], ['comment', '评论'], ['reply', '回复'], ['dm', '私信'], ['post', '动态'], ['follow', '关注'], ['unfollow', '取关']];
@@ -1371,9 +1393,9 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
           return h(Entry, {
             key: e.id, kind: [kindText[e.kind] ?? e.kind, ''], ctx: e.text && h(Ctx, { text: target, url: e.target?.url }),
             status: [sl, sc], at: e.at, quote: Boolean(e.text), error: e.error,
-            meta: [e.kind === 'reply' && e.target?.to && `回复 ${e.target.to}`, e.target?.engine && (e.target.engine === 'guard' ? '守评论区' : '收件箱'), e.draft && `草稿 #${e.draft}`, e.deleted && '已在 B站删掉', e.kind === 'reply' && e.target?.url && h('a', { href: e.target.url, target: '_blank', rel: 'noreferrer' }, '去那条楼看')],
+            meta: [e.kind === 'reply' && e.target?.to && `回复 ${e.target.to}`, e.target?.engine && (e.target.engine === 'guard' ? '守评论区' : '收件箱'), e.draft && `草稿 #${e.draft}`, e.target?.sticker && `带表情包「${e.target.sticker}」`, e.deleted && '已在 B站删掉', e.kind === 'reply' && e.target?.url && h('a', { href: e.target.url, target: '_blank', rel: 'noreferrer' }, '去那条楼看')],
             actions: canDel && h(ConfirmBtn, { key: 'del', subtle: true, label: '在 B站删掉', confirmLabel: '确认删除？', onConfirm: () => del(e.id) }),
-          }, e.target?.quote && h('div', { className: 'be-faint', style: { fontSize: 12.5 } }, `${e.target.to || '对方'}说：「${e.target.quote}」`), e.text || (target && (e.target.url ? h('a', { href: e.target.url, target: '_blank', rel: 'noreferrer' }, target) : target)));
+          }, e.target?.quote && h('div', { className: 'be-faint', style: { fontSize: 12.5 } }, `${e.target.to || '对方'}说：「${e.target.quote}」`), e.text ? h(EmoteText, { text: e.text }) : (target && (e.target.url ? h('a', { href: e.target.url, target: '_blank', rel: 'noreferrer' }, target) : target)));
         }));
     }
 
@@ -1470,11 +1492,164 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
           })));
     }
 
+    // ── 表情 ─────────────────────────────────────────────────────────────────
+    const EMO_CODE = /\[[^[\]\s]{1,24}\]/g;
+    const emoImg = (url) => `${ROUTE}?${new URLSearchParams({ view: 'img', url })}`;
+    const stickerImg = (id) => `${ROUTE}?${new URLSearchParams({ view: 'img', src: 'sticker', id: String(id) })}`;
+    const splitPicks = (s) => String(s ?? '').split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+    const pkgIds = (s) => new Set(String(s ?? '').split(/[,，\s]+/).map(Number).filter((n) => n > 0));
+    const SAVED_EMOTE = '表情已保存。不能用的表情马上就不让用了；她能看到的表情列表要重启 DSH 才更新。';
+
+    // 记录、草稿里把表情代码显示成图：代码 → {url, size}，整个页面只读一次
+    let emoMapPromise = null;
+    function useEmoMap() {
+      const [map, setMap] = useState(null);
+      useEffect(() => {
+        if (!emoMapPromise) {
+          emoMapPromise = api.get('emotes').then((d) => {
+            const m = new Map();
+            for (const p of d.packages ?? []) for (const e of p.emotes) if (e.url) m.set(e.text, { url: e.url, size: e.size });
+            return m;
+          }, () => new Map());
+        }
+        let alive = true;
+        emoMapPromise.then((m) => { if (alive) setMap(m); });
+        return () => { alive = false; };
+      }, []);
+      return map;
+    }
+    function EmoteText({ text }) {
+      const map = useEmoMap();
+      const s = String(text ?? '');
+      if (!map || !map.size || !s.includes('[')) return s;
+      const out = []; let last = 0;
+      for (const m of s.matchAll(EMO_CODE)) {
+        const e = map.get(m[0]);
+        if (!e) continue;
+        if (m.index > last) out.push(s.slice(last, m.index));
+        out.push(h('img', { key: m.index, className: `be-emi${e.size >= 2 ? ' big' : ''}`, src: emoImg(e.url), alt: m[0], title: m[0] }));
+        last = m.index + m[0].length;
+      }
+      if (!out.length) return s;
+      if (last < s.length) out.push(s.slice(last));
+      return h(React.Fragment, null, out);
+    }
+
+    /** 账号里的表情系列：开关、展开挑「常用」、刷新。改的是草稿里的 emotePkgs / emotePicks，和别的设置一起保存。 */
+    function EmotePackages({ e, draft, set, toast, onData }) {
+      const [open, setOpen] = useState(null);
+      const [busy, setBusy] = useState(false);
+      const on = pkgIds(draft.emotePkgs);
+      const picks = splitPicks(draft.emotePicks);
+      const pickSet = new Set(picks);
+      const flipPkg = (id) => { const n = new Set(on); if (n.has(id)) n.delete(id); else n.add(id); set({ emotePkgs: [...n].sort((a, b) => a - b).join(',') }); };
+      const flipPick = (t) => set({ emotePicks: (pickSet.has(t) ? picks.filter((x) => x !== t) : [...picks, t]).join('\n') });
+      const refresh = () => { setBusy(true); api.post('emoteRefresh').then((r) => { onData(r); toast(`刷新好了：${r.packages.length} 个表情系列${r.packages.some((p) => p.fresh) ? '，有新的（默认关着）' : ''}`); }, (er) => toast(er.message, true)).finally(() => setBusy(false)); };
+      const listed = e.packages.length ? e.packages.filter((p) => on.has(p.id)).reduce((n, p) => n + p.emotes.filter((x) => pickSet.has(x.text)).length, 0) : picks.length;
+      return h('div', { className: 'be-field wide' },
+        h('label', null, '表情系列'),
+        h('div', { className: 'be-row', style: { marginBottom: 8 } },
+          h(Btn, { disabled: busy, onClick: refresh }, busy ? '拉取中…' : '刷新表情包'),
+          h('span', { className: 'be-faint' }, e.at ? `上次刷新：${when(e.at)}` : '还没拉过'),
+          e.error && h('span', { className: 'be-err' }, `上次出错：${e.error}`)),
+        !e.packages.length
+          ? h('div', { className: 'be-empty' }, '还没拉过这个账号的表情面板：先在「概览」扫码登录 B站，再点「刷新表情包」。没拉到之前，她只用默认的常用表情：', h('div', { style: { marginTop: 6, color: 'var(--t2)' } }, picks.join(' ')))
+          : h('div', { className: 'be-emo-pkgs' }, e.packages.map((p) => {
+            const n = p.emotes.filter((x) => pickSet.has(x.text)).length;
+            const isOpen = open === p.id;
+            return h('div', { key: p.id, className: 'be-emo-pkg' },
+              h('div', { className: 'be-emo-ph' },
+                h('label', { className: 'be-switch' }, h('input', { type: 'checkbox', role: 'switch', checked: on.has(p.id), onChange: () => flipPkg(p.id) }), p.text,
+                  p.fresh && h('span', { className: 'be-badge brand' }, '新')),
+                h('span', { className: 'be-meta' }, `${p.emotes.length} 个 · ${p.kind === 'text' ? '文字' : p.size >= 2 ? '大图' : '小图'} · 常用 ${n} 个`),
+                h(ActBtn, { onClick: () => setOpen(isOpen ? null : p.id) }, isOpen ? '收起' : '展开')),
+              isOpen && h('div', { className: 'be-emo-grid' }, p.emotes.map((x) => h('button', {
+                key: x.text, type: 'button', className: `be-emo${pickSet.has(x.text) ? ' on' : ''}${x.size >= 2 ? ' big' : ''}`,
+                title: `${x.text}${pickSet.has(x.text) ? '（常用）' : ''}`, 'aria-pressed': pickSet.has(x.text), onClick: () => flipPick(x.text),
+              }, x.url ? h('img', { src: emoImg(x.url), alt: x.text, loading: 'lazy' }) : x.text))));
+          })),
+        h('small', null, `开着的系列她都能用；点「展开」标的「常用」会写进她的说明里（现在 ${listed} 个${listed > 40 ? '，太多了：她挑不过来，也占说明的字数，建议 40 个以内' : ''}）。关掉的系列，她用了也会被去掉。刷新后新出现的系列默认关着。`));
+    }
+
+    /** 表情包：上传、改名字和说明、删。 */
+    function StickerCard({ e, toast, onData }) {
+      const [form, setForm] = useState({ name: '', when: '', file: null });
+      const [editing, setEditing] = useState(null);
+      const [busy, setBusy] = useState(false);
+      const fileRef = useRef(null);
+      const upload = () => {
+        if (!form.file) return toast('先选一张图', true);
+        if (form.file.size > 2 * 1024 * 1024) return toast('图片最大 2 MB', true);
+        setBusy(true);
+        const rd = new FileReader();
+        rd.onload = () => {
+          fetch(`${ROUTE}?upload=sticker`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'stickerAdd', name: form.name, when: form.when, data: String(rd.result) }) })
+            .then(unwrap).then((r) => { onData(r); setForm({ name: '', when: '', file: null }); if (fileRef.current) fileRef.current.value = ''; toast(`加好了。${SAVED_EMOTE.replace('表情已保存。不能用的表情马上就不让用了；', '')}`); }, (er) => toast(er.message, true)).finally(() => setBusy(false));
+        };
+        rd.onerror = () => { setBusy(false); toast('读不了这个文件', true); };
+        rd.readAsDataURL(form.file);
+      };
+      const post = (action, body, msg) => api.post(action, body).then((r) => { onData(r); setEditing(null); if (msg) toast(msg); }, (er) => toast(er.message, true));
+      return h(Card, { title: '我的表情包', aside: `${e.stickers.length} / 30 张 · 今天带了 ${e.stickerToday} 条`, desc: '她发顶层评论时可以带一张（要先在上面打开「评论可以带表情包」；回复别人时 B站 不让带图）。她看不到图，只能靠名字和「什么时候用」来挑，写清楚一点。第一次用到时才上传到 B站。' },
+        e.stickerPausedUntil > 0 && h('div', { className: 'be-row' },
+          h('span', { className: 'be-err' }, `表情包停用到 ${when(e.stickerPausedUntil)}：${e.stickerPauseReason}`),
+          h(Btn, { onClick: () => post('stickerResume', {}, '表情包恢复了') }, '现在恢复')),
+        h(ScrollList, { items: e.stickers, empty: '还没有表情包。' }, (x) => h('div', { key: x.id, className: 'be-entry' },
+          editing?.id === x.id
+            ? h('div', { className: 'be-stk' }, h('img', { src: stickerImg(x.id), alt: x.name }),
+              h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minWidth: 0 } },
+                h('input', { className: 'be-input', value: editing.name, maxLength: 8, placeholder: '名字（8 字内）', 'aria-label': '名字', onChange: (ev) => setEditing({ ...editing, name: ev.target.value }) }),
+                h('input', { className: 'be-input', value: editing.when, maxLength: 30, placeholder: '什么时候用（30 字内）', 'aria-label': '什么时候用', onChange: (ev) => setEditing({ ...editing, when: ev.target.value }) }),
+                h('div', { className: 'be-row' }, h(Btn, { kind: 'primary', onClick: () => post('stickerUpdate', editing, '改好了。重启 DSH 后她才看得到新的名字和说明') }, '保存'), h(Btn, { onClick: () => setEditing(null) }, '取消'))))
+            : h('div', { className: 'be-stk' }, h('img', { src: stickerImg(x.id), alt: x.name, loading: 'lazy' }),
+              h('div', { style: { flex: 1, minWidth: 0 } },
+                h('div', { className: 'be-et' }, x.name),
+                h('div', { className: 'be-faint' }, x.when || '（没写什么时候用）'),
+                h('div', { className: 'be-faint', style: { fontSize: 12 } }, [`${x.width}×${x.height}`, fmtBytes(x.bytes), x.uploaded ? '已传到 B站' : '还没用过'].join(' · '))),
+              h('div', { className: 'be-row', style: { flex: 'none' } },
+                h(ActBtn, { onClick: () => setEditing({ id: x.id, name: x.name, when: x.when }) }, '改'),
+                h(ConfirmBtn, { subtle: true, label: '删', confirmLabel: '确认删？', onConfirm: () => post('stickerRemove', { id: x.id }, '删了') }))))),
+        e.stickers.length < 30 && h('div', { className: 'be-fields', style: { marginTop: 12 } },
+          h(Field, { label: '图片', hint: 'png / jpg / gif / webp，2 MB 以内' }, h('input', { ref: fileRef, type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp', onChange: (ev) => setForm({ ...form, file: ev.target.files?.[0] ?? null }) })),
+          h(Field, { label: '名字', hint: '8 字以内，她用这个名字来点它' }, h('input', { className: 'be-input', value: form.name, maxLength: 8, placeholder: '比如：无语', onChange: (ev) => setForm({ ...form, name: ev.target.value }) })),
+          h(Field, { label: '什么时候用', hint: '30 字以内', wide: true }, h('input', { className: 'be-input', value: form.when, maxLength: 30, placeholder: '比如：看到离谱操作时', onChange: (ev) => setForm({ ...form, when: ev.target.value }) })),
+          h('div', { className: 'be-row' }, h(Btn, { kind: 'primary', disabled: busy || !form.file || !form.name.trim(), onClick: upload }, busy ? '上传中…' : '加进去'))));
+    }
+
+    function EmotePanel({ toast, active }) {
+      const st = useView('emotes');
+      useRefreshOnShow(active, st.reload);
+      const [data, setData] = useState(null);
+      useEffect(() => { if (st.data) setData(st.data); }, [st.data]);
+      const onData = (r) => { setData(r); emoMapPromise = null; };
+      const onSaved = (_cfg, group) => {
+        if (group === 'emote' && data?.packages.some((p) => p.fresh)) api.post('emoteSeen').then(onData, () => {});
+        else st.reload();
+      };
+      return h(Loading, { state: st }, () => data && h(React.Fragment, null,
+        data.stale && h('div', { className: 'be-stale', role: 'status' }, '表情设置改过了，重启 DSH 后她才看得到新的表情列表。不能用的表情已经马上不让用了。'),
+        h(ConfigGroups, {
+          groups: [
+            ['emote', '表情', 'B站自带的表情（[doge]、大表情、颜文字），评论、回复、私信、动态里都能用。认不出的代码（比如 [狗头]）、关掉的系列里的、超过上限的，发之前都会去掉，不会显示成方括号文字。'],
+            ['sticker', '表情包', '主人上传的图，发顶层评论时带一张（回复别人时 B站 不让带图）。B站带图评论的接口没有公开文档：被设成仅自己可见时会自动停用 24 小时，文字照常发。'],
+          ],
+          toast, footer: true, onSaved,
+          savedText: (group) => (group === 'emote' || group === 'sticker' ? SAVED_EMOTE : null),
+          footerText: '能不能用马上生效；她看到的表情列表和表情包说明要重启 DSH 才更新。',
+          render: {
+            emote: ({ list, draft, set, d }) => h('div', { className: 'be-fields' },
+              list.filter((f) => !f.custom).map((fld) => h(FieldInput, { key: fld.key, fld, value: draft[fld.key], def: d.defaults[fld.key], onChange: (v) => set({ [fld.key]: v }) })),
+              h(EmotePackages, { e: data, draft, set, toast, onData })),
+          },
+        }),
+        h(StickerCard, { e: data, toast, onData })));
+    }
+
     function InteractPage({ toast, active, sub, setSub, go }) {
       const st = useView('act');
       useRefreshOnShow(active, st.reload);
       return h(Loading, { state: st }, (d) => h(SubPages, {
-        items: [['summary', '概况', ActSummary], ['drafts', '待同意', Drafts, d.drafts.filter((x) => !x.expired).length], ['log', '记录', ActLog], ['guard', '守评论区', GuardPanel], ['follows', '关注', Follows], ['favs', '收藏', Favs], ['settings', '设置', ActSettings]],
+        items: [['summary', '概况', ActSummary], ['drafts', '待同意', Drafts, d.drafts.filter((x) => !x.expired).length], ['log', '记录', ActLog], ['guard', '守评论区', GuardPanel], ['follows', '关注', Follows], ['favs', '收藏', Favs], ['emotes', '表情', EmotePanel], ['settings', '设置', ActSettings]],
         sub, setSub, active, props: { toast, d, reload: st.reload, go },
       }));
     }

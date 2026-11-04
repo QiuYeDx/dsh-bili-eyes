@@ -10,6 +10,7 @@ import path from 'node:path';
 import { DATA_DIR, saveConfig, DEFAULTS, permFor, permKey, permLabel } from './config.js';
 import { clip } from './look.js';
 import { sessionContext, ownerMessages, gateKind } from './gate.js';
+import { uploadedSticker, pauseStickers } from './sticker.js';
 
 export const DRAFTS_FILE = path.join(DATA_DIR, 'drafts.json');
 export const ACTIONS_FILE = path.join(DATA_DIR, 'actions.jsonl');
@@ -295,12 +296,20 @@ async function perform(client, d, cfg) {
   }
   if (d.kind === 'fav' || d.kind === 'unfav') return performFav(client, d, cfg);
   if (d.kind === 'comment' || d.kind === 'reply') {
-    const r = await client.addComment({ oid: p.oid, type: p.type, message: p.text, root: p.root, parent: p.parent, atNameToMid: p.atNameToMid });
+    // 表情包：真正发的时候才传图（传过的用记下的地址）；传不上就只发文字
+    let pictures = null; let stickerNote = '';
+    if (p.sticker && d.kind === 'reply') stickerNote = '（楼中楼 B站 不让带图，表情包没带上，只发了文字）';
+    else if (p.sticker) {
+      try { pictures = [await uploadedSticker(client, p.sticker)]; }
+      catch (e) { stickerNote = `（表情包「${p.sticker.name}」没传上去：${e?.message ?? e}，只发了文字）`; }
+    }
+    const r = await client.addComment({ oid: p.oid, type: p.type, message: p.text, root: p.root, parent: p.parent, atNameToMid: p.atNameToMid, pictures });
     const rpid = String(r?.rpid_str ?? r?.rpid ?? '');
     // B站接受了不等于别人看得到：发评论接口返回的 reply.state 是 0（乐观值），实际可能被设成
     // 「仅自己可见」（state 17，风控或审核中），接口照样返回成功。只能发完用自己的视角再查一遍。
     const state = await verifyCommentState(client, { oid: p.oid, type: p.type, rpid, root: d.kind === 'reply' ? p.root : 0 });
-    return { rpid, state, hidden: state != null && state !== 0, info: state === 0 ? `${KIND_TEXT[d.kind]}发出去了（已确认别人看得到）` : `${KIND_TEXT[d.kind]}发出去了` };
+    const withPic = pictures ? `（带表情包「${p.sticker.name}」）` : '';
+    return { rpid, state, hidden: state != null && state !== 0, withPic: Boolean(pictures), info: (state === 0 ? `${KIND_TEXT[d.kind]}发出去了${withPic}（已确认别人看得到）` : `${KIND_TEXT[d.kind]}发出去了${withPic}`) + stickerNote };
   }
   if (d.kind === 'dm') { await client.sendDm({ receiverMid: p.to, text: p.text }); return { info: '私信发出去了' }; }
   if (FOLLOW.has(d.kind)) return performFollow(client, d, cfg?.followTag || DEFAULT_FOLLOW_TAG);
@@ -407,7 +416,8 @@ async function send(d, { cfg, client, entries = readAudit(2000), now = Date.now(
       drafts.pausedUntil = now + HIDDEN_PAUSE_MS;
       drafts.pauseReason = '上一条评论被 B站设成了仅自己可见';
       saveDrafts(drafts, draftsFile);
-      return { status: 'hidden', rpid: r.rpid, text: `${KIND_TEXT[d.kind]}发出去了，但 B站把它设成了「仅自己可见」（风控或审核，状态 ${r.state}），别人看不到，被 @ 的人也收不到通知。照实告诉主人，别说「发好了」，也别换个说法重发；写操作先暂停 2 小时。` };
+      if (r.withPic) pauseStickers('上一条带表情包的评论被 B站设成了仅自己可见', { now });
+      return { status: 'hidden', rpid: r.rpid, text: `${KIND_TEXT[d.kind]}发出去了，但 B站把它设成了「仅自己可见」（风控或审核，状态 ${r.state}），别人看不到，被 @ 的人也收不到通知。照实告诉主人，别说「发好了」，也别换个说法重发；写操作先暂停 2 小时${r.withPic ? '，表情包停用 24 小时' : ''}。` };
     }
     audit({ kind: d.kind, status: 'ok', how, draft: draftId, target: r.folderId ? { ...d.target, folderId: String(r.folderId), folder: r.folderTitle } : d.target, text: d.payload?.text, rpid: r.rpid ?? '', state: r.state ?? null }, auditFile);
     const unsure = r.state == null && (d.kind === 'comment' || d.kind === 'reply') ? '（没能确认别人看不看得到）' : '';

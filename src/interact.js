@@ -11,6 +11,8 @@ import { nativeApprover } from './gate.js';
 import { ensureDevice } from './device.js';
 import { loadInbox, saveInbox, checkInbox, deliver, inQuiet, formatInbox, markItems, byWake } from './inbox.js';
 import { loadEngine, saveEngine, processBatch, reportLines, sendReport, engineLock } from './engine.js';
+import { tidyEmotes, droppedNote, hasWords, refreshIfStale } from './emote.js';
+import { pickSticker } from './sticker.js';
 
 // bili_comments 返回过的评论：rpid → {root, oid, user, mid}。回复时靠它找到楼层（楼中楼的 root 不是它自己），也靠它知道回的是谁。
 const seenComments = new Map();
@@ -49,9 +51,20 @@ export async function writeClient(cfg) {
 
 const opts = (cfg, client, exec, extra = {}) => ({ cfg, client, sessionId: sessionIdOf(exec), session: exec?.agent?.session ?? null, approve: nativeApprover(exec), via: 'tool', ...extra });
 
-async function afterSent(r, inboxId) {
+async function afterSent(r, inboxId, note = '') {
   if (r.status === 'sent' && inboxId) { const st = loadInbox(); if (markItems(st, [inboxId], 'done')) saveInbox(st); }
-  return r;
+  return note ? { ...r, text: `${r.text}${note}` } : r;
+}
+
+/**
+ * 正文里的表情：按当前设置去掉不能用的（emote.js），再做正文检查。
+ * 返回 {text, note}；没过检查抛 ActError。顺便在后台刷新过期的表情面板。
+ */
+export function prepareText(kind, raw, cfg, { ownerName: name = '', mention = false, client = null } = {}) {
+  if (client) refreshIfStale(() => client);
+  const t = tidyEmotes(raw, cfg);
+  if (kind === 'comment' && t.text && !hasWords(t.text)) throw new ActError('顶层评论要有字，不能只发表情（回复别人时可以）');
+  return { text: checkText(kind, t.text, { ownerName: name, mention }), note: droppedNote(t.dropped) };
 }
 
 export async function likeTool(args, exec, { cfg = loadConfig() } = {}) {
@@ -121,26 +134,30 @@ export async function commentTool(args, exec, { cfg = loadConfig() } = {}) {
     }
     target = { ...payload, bvid: v.bvid, title: v.title, url, to: who };
   }
-  try { payload.text = checkText(kind, args.text, { ownerName: name, mention: Boolean(args.mention) }); } catch (e) { if (e instanceof ActError) return { status: 'refused', text: `没发：${e.message}` }; throw e; }
+  let note = '';
+  try { ({ text: payload.text, note } = prepareText(kind, args.text, cfg, { ownerName: name, mention: Boolean(args.mention), client })); } catch (e) { if (e instanceof ActError) return { status: 'refused', text: `没发：${e.message}` }; throw e; }
   if (name && payload.text.includes(`@${name}`)) payload.atNameToMid = { [name]: cfg.ownerMid };
-  const preview = `${kind === 'reply' ? `回复${who ? ` ${who}` : ''}` : `在《${clip(target.title, 30)}》下评论`}：${clip(payload.text, 60)}`;
-  return afterSent(await request({ kind, payload, preview, target, audience }, opts(cfg, client, exec)), inboxId);
+  // 表情包：能带就放进 payload（发出去时才上传）；不能带只发文字，告诉她为什么
+  const pick = pickSticker(args.sticker, cfg, { kind, entries: readAudit(2000) });
+  if (pick.sticker) { payload.sticker = pick.sticker; target.sticker = pick.sticker.name; }
+  const preview = `${kind === 'reply' ? `回复${who ? ` ${who}` : ''}` : `在《${clip(target.title, 30)}》下评论`}：${clip(payload.text, 60)}${pick.sticker ? `（带表情包「${pick.sticker.name}」）` : ''}`;
+  return afterSent(await request({ kind, payload, preview, target, audience }, opts(cfg, client, exec)), inboxId, note + pick.note);
 }
 
 export async function dmTool(args, exec, { cfg = loadConfig() } = {}) {
   if (!cfg.ownerMid) return { status: 'refused', text: '没发：主人的 B站 UID 还没设置（设置页 → 互动），私信只能发给主人' };
   const client = await writeClient(cfg);
-  let text;
-  try { text = checkText('dm', args.text, { ownerName: await ownerName(client, cfg).catch(() => '') }); } catch (e) { if (e instanceof ActError) return { status: 'refused', text: `没发：${e.message}` }; throw e; }
-  return request({ kind: 'dm', payload: { to: cfg.ownerMid, text }, preview: `私信主人：${clip(text, 60)}`, target: { to: String(cfg.ownerMid) }, audience: 'own' }, opts(cfg, client, exec));
+  let text; let note = '';
+  try { ({ text, note } = prepareText('dm', args.text, cfg, { ownerName: await ownerName(client, cfg).catch(() => ''), client })); } catch (e) { if (e instanceof ActError) return { status: 'refused', text: `没发：${e.message}` }; throw e; }
+  return afterSent(await request({ kind: 'dm', payload: { to: cfg.ownerMid, text }, preview: `私信主人：${clip(text, 60)}`, target: { to: String(cfg.ownerMid) }, audience: 'own' }, opts(cfg, client, exec)), '', note);
 }
 
 export async function postTool(args, exec, { cfg = loadConfig() } = {}) {
   const client = await writeClient(cfg);
-  let text;
-  try { text = checkText('post', args.text, { ownerName: await ownerName(client, cfg).catch(() => '') }); } catch (e) { if (e instanceof ActError) return { status: 'refused', text: `没发：${e.message}` }; throw e; }
+  let text; let note = '';
+  try { ({ text, note } = prepareText('post', args.text, cfg, { ownerName: await ownerName(client, cfg).catch(() => ''), client })); } catch (e) { if (e instanceof ActError) return { status: 'refused', text: `没发：${e.message}` }; throw e; }
   if (text.includes('@')) return { status: 'refused', text: '没发：动态里不 @ 人' };
-  return request({ kind: 'post', payload: { text }, preview: `动态：${clip(text, 60)}`, target: {} }, opts(cfg, client, exec));
+  return afterSent(await request({ kind: 'post', payload: { text }, preview: `动态：${clip(text, 60)}`, target: {} }, opts(cfg, client, exec)), '', note);
 }
 
 /**

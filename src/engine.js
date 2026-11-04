@@ -10,6 +10,7 @@ import { clip } from './look.js';
 import { request as actRequest, checkText, readAudit, ActError } from './act.js';
 import { notify as gateNotify, gateKind } from './gate.js';
 import { videoUp, replyAudience } from './audience.js';
+import { emoteGuide, tidyEmotes, promptLine } from './emote.js';
 
 export const ENGINE_FILE = path.join(DATA_DIR, 'engine.json');
 const KEEP_DECISIONS = 400;
@@ -74,7 +75,8 @@ const SYSTEM = [
 export function buildPrompt(cfg, items, { notes = {}, videos = {} } = {}) {
   const owner = cfg.engOwnerName || '主人';
   const system = SYSTEM.replaceAll('{identity}', cfg.engIdentity || '主人家的 AI 助手').replaceAll('{owner}', owner)
-    .replace('{voice}', cfg.autoSurfVoice || '友善、口语化、像个爱刷 B站 的年轻人').replace('{maxLen}', String(cfg.engMaxLen));
+    .replace('{voice}', cfg.autoSurfVoice || '友善、口语化、像个爱刷 B站 的年轻人').replace('{maxLen}', String(cfg.engMaxLen))
+    + promptLine(emoteGuide(cfg, { forTool: false }));
   // 按视频分组：每个视频的信息和问答备忘只写一次
   const groups = new Map();
   items.forEach((x, i) => {
@@ -241,8 +243,10 @@ export async function processBatch(items, { cfg, ask, client, selfMid = 0, owner
       const thread = await client.commentReplies(x.oid, x.root, { n: 20 }).catch(() => null);
       if (thread?.list?.some((r) => Number(r.mid) === Number(cfg.ownerMid))) { decide(x, 'skipped', { ...base, why: '主人已经回过这条了' }); continue; }
     }
-    let text = fitLength(v.reply, cfg.engMaxLen);
-    if (!text) { decide(x, 'skipped', { ...base, why: `回复超过 ${cfg.engMaxLen} 字，截不出完整的一句` }); continue; }
+    const fitted = fitLength(v.reply, cfg.engMaxLen);
+    if (!fitted) { decide(x, 'skipped', { ...base, why: `回复超过 ${cfg.engMaxLen} 字，截不出完整的一句` }); continue; }
+    let text = tidyEmotes(fitted, cfg).text;   // 去掉不能用的表情
+    if (!text) { decide(x, 'skipped', { ...base, why: '回复里只有不能用的表情' }); continue; }
     try { text = checkText('reply', text, { ownerName }); }
     catch (e) {
       if (e instanceof ActError) { decide(x, 'skipped', { ...base, why: `回复没过检查：${e.message}` }); continue; }

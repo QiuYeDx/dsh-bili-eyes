@@ -29,6 +29,8 @@ import { patchStatus, applyPatches } from './adapters/dsh-qq-patch.js';
 import { mediaBins, mediaDirOf, resetFfmpegCheck } from './media.js';
 import { installFfmpeg, installState } from './ffmpeg-fetch.js';
 import { updateState, checkUpdate, checkUpdateIfStale, installInfo, changelogFor, QQ_GROUP } from './update.js';
+import { loadEmotes, refreshEmotes, clearFresh, emoteStale, emoteImage, pkgIdsOf } from './emote.js';
+import { loadStickers, addSticker, updateSticker, removeSticker, resumeStickers, stickerBytes, stickersToday, StickerError } from './sticker.js';
 
 export const API_ROUTE = '/api/bili-eyes';
 export const TOOL_NAMES = ALL_TOOLS;
@@ -49,10 +51,12 @@ function json(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-function readBody(req) {
+// 上传表情包（图片 base64）的请求可以大一些，别的都 ≤ 16 KB
+const BIG_BODY = 3 * 1024 * 1024;
+function readBody(req, limit = 16384) {
   return new Promise((resolve, reject) => {
     const chunks = []; let size = 0;
-    req.on('data', (c) => { size += c.length; if (size > 16384) { reject(new Error('请求太大')); req.destroy(); return; } chunks.push(c); });
+    req.on('data', (c) => { size += c.length; if (size > limit) { reject(new Error(limit > 16384 ? '图片太大（最大 2 MB）' : '请求太大')); req.destroy(); return; } chunks.push(c); });
     req.on('end', () => { try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); } catch { reject(new Error('请求不是 JSON')); } });
     req.on('error', reject);
   });
@@ -190,6 +194,7 @@ async function getView(view, ctx, q = new URLSearchParams()) {
         { id: 'gate', ok: true, optional: gk === 'builtin', label: { service: '门卫：桥接插件提供', 'dsh-qq': `门卫：dsh-qq 桥接（${cfg.qqBridgeDir}）`, http: `门卫：${cfg.gateUrl}`, builtin: '门卫：内置（按会话的 agentPreset / 工作目录判断）' }[gk], hint: (gk === 'builtin' ? '内置门卫只是推断：本机会话「先问主人」时弹 DSH 审批卡片；桥接会话只能起草、在「互动 → 待同意」里同意；收件箱没处转达。接 QQ 等桥接时最好让桥接提供门卫（docs/门卫协议.md）。' : '') + (judged.length ? ` 最近的会话：${judged.slice(0, 4).map((j) => `${j.label}${j.trusted ? '✓' : '✗'}`).join('，')}` : '') },
         { id: 'inbox', ok: cfg.inboxOn, optional: true, label: cfg.inboxOn ? `收件箱：每 ${cfg.inboxIntervalSeconds} 秒查一次${cfg.inboxQuiet ? `，${cfg.inboxQuiet} 不查` : ''}` : '收件箱没开', hint: cfg.inboxOn ? (gk === 'builtin' ? '没接门卫：新消息不会主动转达，她下次用 B站工具时会提一句' : '') : '可选：在「收件箱 → 设置」里打开后，别人回复、@、私信会转达给她' },
         { id: 'disk', ok: !onC(mediaDirOf(cfg)), optional: true, label: `下载的视频放在 ${mediaDirOf(cfg)}`, hint: onC(mediaDirOf(cfg)) ? '在系统盘：视频多了占地方，可以在「设置 → 存储」换到别的盘' : '' },
+        ...(emoteStale(cfg, loadStickers().list) ? [{ id: 'emote', ok: false, optional: true, label: '表情设置改过了，重启 DSH 后她才看得到新的表情列表', hint: '不能用的表情已经马上不让用了；新开的系列、新标的常用、新加的表情包，要重启 DSH 才写进她的工具说明（「互动 → 表情」）' }] : []),
         { id: 'asr', ok: asr.ok, optional: true, label: asr.ok ? `语音识别：${asr.baseUrl}${asr.model ? `（${asr.model}）` : ''}${asr.managed ? '，用到时自动拉起' : ''}` : '没配置语音识别', hint: asr.ok ? '' : '可选：没有字幕的视频就没有台词。在「设置 → 语音识别」里配：硅基流动填个 API Key 就行，也可以用本机服务' },
       ],
       todo: (() => {
@@ -242,6 +247,7 @@ async function getView(view, ctx, q = new URLSearchParams()) {
     return { on: cfg.autoSurfOn, day: st.day, slots: cfg.autoSurfOn ? st.slots : [], done: st.done, runs: st.runs.slice(0, 15), gate: gateKind(cfg) !== 'builtin' };
   }
   if (view === 'config') return { config: cfg, defaults: DEFAULTS, fields: FIELDS, configFile: CONFIG_FILE, askPresets: ASK_PRESETS };
+  if (view === 'emotes') return emoteView(cfg);
   // 「谁叫的」靠门卫认人：现在的门卫能不能给消息记录（recentMessages，协议 v2）
   if (view === 'askGate') {
     const hi = await hello(cfg);
@@ -328,6 +334,25 @@ async function postAction(body, ctx) {
       if (!keys.length) throw new Error('不认识的分组');
       return { config: saveConfig(Object.fromEntries(keys.map((k) => [k, DEFAULTS[k]]))) };
     }
+    // 表情：刷新账号的表情面板、去掉「新」标记
+    case 'emoteRefresh': {
+      const client = await writeClient(cfg);
+      try { await refreshEmotes(client); } catch (e) { throw new Error(`没拉到表情面板：${e?.message ?? e}`); }
+      return emoteView(loadConfig());
+    }
+    case 'emoteSeen': clearFresh(); return emoteView(cfg);
+    // 表情包：加、改名字和说明、删、手动恢复
+    case 'stickerAdd':
+    case 'stickerUpdate':
+    case 'stickerRemove':
+    case 'stickerResume':
+      try {
+        if (body.action === 'stickerAdd') addSticker({ name: body.name, when: body.when, data: body.data });
+        else if (body.action === 'stickerUpdate') updateSticker(body.id, { name: body.name, when: body.when });
+        else if (body.action === 'stickerRemove') removeSticker(body.id);
+        else resumeStickers();
+      } catch (e) { if (e instanceof StickerError) throw new Error(e.message); throw e; }
+      return emoteView(cfg);
     case 'checkPath': return checkWritableDir(String(body.path ?? '').trim());
     case 'checkTool': return toolVersion(body.kind === 'ytdlp' ? 'ytdlp' : 'ffmpeg', String(body.path ?? '').trim());
     case 'ffmpegInstall': return { install: installFfmpeg() };
@@ -471,14 +496,50 @@ async function postAction(body, ctx) {
   }
 }
 
+/** 设置页显示的图：B站表情（代理 + 本地缓存）、主人上传的表情包。 */
+async function sendImage(res, q) {
+  let img = null;
+  if (q.get('src') === 'sticker') {
+    const item = loadStickers().list.find((x) => x.id === Number(q.get('id')));
+    if (item) { try { img = { buf: stickerBytes(item), type: item.type }; } catch { img = null; } }
+  } else {
+    img = await emoteImage(String(q.get('url') ?? '')).catch(() => null);
+  }
+  if (!img) { res.writeHead(404, { 'cache-control': 'no-store' }); return res.end(); }
+  res.writeHead(200, { 'content-type': img.type, 'cache-control': 'private, max-age=86400', 'x-content-type-options': 'nosniff' });
+  return res.end(img.buf);
+}
+
+/** 「表情」页：账号里的表情系列（启用没启用）、表情包、要不要提醒重启。 */
+function emoteView(cfg) {
+  const cache = loadEmotes();
+  const st = loadStickers();
+  const on = pkgIdsOf(cfg.emotePkgs);
+  return {
+    at: cache.at, error: cache.error,
+    packages: cache.packages.map((p) => ({ ...p, on: on.has(p.id), fresh: cache.fresh.includes(p.id) })),
+    stale: emoteStale(cfg, st.list),
+    stickers: st.list.map(({ id, name, when, width, height, bytes, type, uploaded }) => ({ id, name, when, width, height, bytes, type, uploaded: Boolean(uploaded?.url) })),
+    stickerPausedUntil: st.pausedUntil > Date.now() ? st.pausedUntil : 0,
+    stickerPauseReason: st.pauseReason,
+    stickerToday: stickersToday(readAudit(2000)),
+  };
+}
+
 /** 主接口。ctx.registered(): 工具是否已注册（DSH 里由插件提供，预览服务器里模拟）。 */
 export function makeApiHandler(ctx = { registered: () => true }) {
   return async function handler(req, res) {
     if (!sameOrigin(req)) return json(res, 403, { ok: false, error: '只接受本机 DSH 页面的请求' });
     const url = new URL(req.url, 'http://local');
     try {
+      if (req.method === 'GET' && url.searchParams.get('view') === 'img') return sendImage(res, url.searchParams);
       if (req.method === 'GET') return json(res, 200, { ok: true, ...await getView(url.searchParams.get('view') || 'overview', ctx, url.searchParams) });
-      if (req.method === 'POST') return json(res, 200, { ok: true, ...await postAction(await readBody(req), ctx) });
+      if (req.method === 'POST') {
+        const big = url.searchParams.get('upload') === 'sticker';
+        const body = await readBody(req, big ? BIG_BODY : 16384);
+        if ((body.action === 'stickerAdd') !== big) throw new Error('上传表情包要走 ?upload=sticker，别的操作不能');
+        return json(res, 200, { ok: true, ...await postAction(body, ctx) });
+      }
       return json(res, 405, { ok: false, error: '只支持 GET / POST' });
     } catch (e) {
       return json(res, 400, { ok: false, error: e.message, errors: e.errors });

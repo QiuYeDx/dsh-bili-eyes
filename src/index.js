@@ -16,6 +16,8 @@ import { bindHost, gateKind } from './gate.js';
 import { loadInbox } from './inbox.js';
 import { pollAutoSurf } from './auto-surf.js';
 import { pollGuard } from './guard.js';
+import { emoteGuide, markLoaded } from './emote.js';
+import { stickerGuide, loadStickers } from './sticker.js';
 
 export const name = 'dsh-bili-eyes';
 export const inject = ['tools', 'attachments'];
@@ -131,7 +133,12 @@ async function loadDefineTool() {
 
 const tool = (name, description, parameters, timeoutMs = 60_000) => ({ name, description, parameters, output: OUTPUT, timeoutMs });
 
-export function toolSpecs() {
+/**
+ * 工具说明在这里生成（插件加载时一次）。评论、私信、动态的说明里带上「能用的表情」和表情包，
+ * 所以表情设置改了要重启 DSH 才更新（设置页会提醒，见 emote.js 的 emoteStale）。
+ */
+export function toolSpecs(cfg = loadConfig(), stickers = loadStickers().list) {
+  const withEmotes = (desc, extra = '') => [desc, emoteGuide(cfg), extra].filter(Boolean).join('\n');
   return {
     look: tool('bili_look', LOOK_DESCRIPTION, {
       url: { type: 'string', required: true, description: 'B站视频链接、b23.tv 短链、BV 号，或包含链接的分享文字' },
@@ -181,17 +188,18 @@ export function toolSpecs() {
       like: { type: 'boolean', description: 'true = 收藏前顺便点赞' },
       why: { type: 'string', description: '为什么收藏（一句话，可选）' },
     }),
-    comment: tool('bili_comment', COMMENT_DESCRIPTION, {
+    comment: tool('bili_comment', withEmotes(COMMENT_DESCRIPTION, stickerGuide(cfg, stickers)), {
       text: { type: 'string', required: true, description: '评论正文（300 字以内）' },
       url: { type: 'string', description: '视频链接或 BV 号（回复收件箱时不用给）' },
       rpid: { type: 'string', description: '回复哪条评论（bili_comments 里 # 后的数字），可选' },
       inbox: { type: 'string', description: '回复收件箱里的哪条（方括号里的编号），可选' },
       mention: { type: 'boolean', description: 'true = 在开头 @ 主人' },
+      ...(cfg.stickerOn && stickers.length ? { sticker: { type: 'string', description: '带一张表情包：填说明里列的名字，可选；只有顶层评论能带（楼中楼 B站 不让带图）' } } : {}),
     }),
-    dm: tool('bili_dm', DM_DESCRIPTION, {
+    dm: tool('bili_dm', withEmotes(DM_DESCRIPTION), {
       text: { type: 'string', required: true, description: '私信正文（500 字以内）' },
     }),
-    post: tool('bili_post', POST_DESCRIPTION, {
+    post: tool('bili_post', withEmotes(POST_DESCRIPTION), {
       text: { type: 'string', required: true, description: '动态正文（500 字以内）' },
     }),
     follow: tool('bili_follow', FOLLOW_DESCRIPTION, {
@@ -234,7 +242,9 @@ export async function apply(ctx) {
   const disposers = [];
   try {
     const defineTool = await loadDefineTool();
-    const specs = toolSpecs();
+    const cfg0 = loadConfig(); const stickers0 = loadStickers().list;
+    const specs = toolSpecs(cfg0, stickers0);
+    markLoaded(cfg0, stickers0);   // 设置页按它提醒「改了表情要重启」
     const attach = async (pngs, prefix) => {
       const out = [];
       for (let i = 0; i < pngs.length; i += 1) {

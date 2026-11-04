@@ -7,6 +7,14 @@ export const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
 export const DATA_DIR = path.join(DSH_HOME, 'bili-eyes');
 export const CONFIG_FILE = path.join(DSH_HOME, 'bili-eyes.json');
 
+// 默认的「常用」表情（都在小黄脸、tv_小电视、热词系列一、颜文字里）
+export const DEFAULT_PICKS = [
+  '[星星眼]', '[打call]', '[妙啊]', '[给心心]', '[笑哭]', '[doge]', '[吃瓜]', '[无语]', '[大哭]', '[害羞]', '[疑惑]', '[脸红]', '[捂脸]', '[委屈]', '[OK]',
+  '[tv_doge]', '[tv_白眼]', '[tv_委屈]', '[tv_斜眼笑]',
+  '[热词系列_再给一集]', '[热词系列_啊?]', '[热词系列_谢谢老师]',
+  '_(:з」∠)_', '(=・ω・=)',
+].join('\n');
+
 export const DEFAULTS = Object.freeze({
   maxFindPerHour: 60,      // 每小时最多搜几次（bili_find）
   maxPerHour: 30,          // 每小时最多新看几个视频（缓存命中不算；放大看另算，上限是它的 2 倍）
@@ -95,6 +103,13 @@ export const DEFAULTS = Object.freeze({
   engPerDay: 15,           // 单独一份时：每天最多回几条
   engPerVideoHour: 3,      // 每个视频每小时最多回几条
   engGapSeconds: 60,       // 两次回复至少隔多久
+  // 评论带表情（emote.js / sticker.js）：见 docs/评论表情-设计.md
+  emoteMode: 'few',        // off 不用 / few 少用 / many 常用（只改说明里的语气，数量看 emoteMax）
+  emoteMax: 3,             // 一条最多几个表情代码
+  emotePkgs: '1,2,4,53',   // 启用的表情系列 id（小黄脸、tv_小电视、颜文字、热词系列一）
+  emotePicks: DEFAULT_PICKS, // 「常用」：写进她的说明里的表情，一行一个
+  stickerOn: false,        // 表情包图片（主人上传的），评论时可以带一张
+  stickerPerDay: 3,        // 每天最多几条带表情包的评论
   // 互动（写操作）的权限表：每一格是「这类操作 × 对谁」的档位，见 PERM_ROWS
   //   off 关 / asked 主人开口才做（她自己不主动，也不起草）/ approve 先问主人 / auto 在额度内直接做
   ownerMid: 0,             // 主人的 B站 UID：@ 和私信只能对着他
@@ -338,6 +353,12 @@ export const FIELDS = Object.freeze([
   { key: 'engPerDay', group: 'engine', type: 'int', min: 1, max: 100, unit: '条', label: '每天最多回' },
   { key: 'engPerVideoHour', group: 'engine', type: 'int', min: 1, max: 30, unit: '条', label: '每个视频每小时最多回' },
   { key: 'engGapSeconds', group: 'engine', type: 'int', min: 10, max: 3600, unit: '秒', label: '两次回复至少隔' },
+  { key: 'emoteMode', group: 'emote', type: 'enum', options: [['few', '少用（偶尔点缀）'], ['many', '常用'], ['off', '不用']], label: '表情', hint: '评论、回复、私信、动态里用不用 B站表情。只改说明里的语气，数量看下一项' },
+  { key: 'emoteMax', group: 'emote', type: 'int', min: 1, max: 10, unit: '个', label: '一条最多几个表情', hint: '多出来的发之前去掉' },
+  { key: 'emotePkgs', group: 'emote', type: 'text', max: 400, pattern: /^[\d\s,，]*$/, patternHint: '只写系列编号', label: '启用的表情系列', custom: true },
+  { key: 'emotePicks', group: 'emote', type: 'text', max: 4000, multiline: true, label: '常用表情', custom: true },
+  { key: 'stickerOn', group: 'sticker', type: 'bool', label: '评论可以带表情包', hint: '用下面「我的表情包」里的图，只有顶层评论能带（回复别人时 B站 不让带图），一条最多一张' },
+  { key: 'stickerPerDay', group: 'sticker', type: 'int', min: 1, max: 20, unit: '条', label: '每天最多几条带表情包' },
   { key: 'ownerMid', group: 'act', type: 'int', min: 0, max: Number.MAX_SAFE_INTEGER, label: '主人的 B站 UID', hint: '@ 和私信只能对着这个账号；0 = 没设置（不能 @、不能私信）' },
   { key: 'friendMids', group: 'act', type: 'text', max: 400, multiline: true, pattern: /^[\d\s,，]*$/, patternHint: '只写 UID 数字，用逗号或换行分开', label: '其他自己人', hint: '主人的小号、一起玩的朋友的 UID。权限表里对他们按「自己人」算；@ 和私信仍然只能对着主人' },
   { key: 'likePerDay', group: 'act', type: 'int', min: 0, max: 200, unit: '次', label: '每天最多点赞/收藏' },
