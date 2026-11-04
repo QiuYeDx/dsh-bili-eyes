@@ -27,6 +27,20 @@ export const DEFAULTS = Object.freeze({
   scanQuality: '480',      // 整片分镜用的清晰度（短边）；放大看另取高清直链
   ytdlpPath: '',           // yt-dlp 可执行文件（空 = PATH 上找）
   ffmpegPath: '',          // ffmpeg（空 = PATH 上找）
+  // 谁叫的（origin.js）：群里谁叫她看的视频、谁叫她逛，按这张表定看不看、怎么看。见 docs/群聊省额度-设计.md
+  //   full 看 / brief 只看简介（不出分镜，逛就快速逛）/ off 不看
+  askLookOwner: 'full',    // 看视频 · 主人叫的
+  askLookFriend: 'full',   //        · 熟人叫的
+  askLookOther: 'full',    //        · 别人叫的
+  askLookUnknown: 'full',  //        · 说不清是谁叫的
+  askSurfOwner: 'full',    // 逛 · 同上四类
+  askSurfFriend: 'full',
+  askSurfOther: 'full',
+  askSurfUnknown: 'full',
+  askFriendQQ: '',         // 熟人的 QQ 号（主人的小号、信得过的群友）
+  askFriendPerDay: 0,      // 熟人每人每天最多让她新看几个（0 = 不限；超了「看」降成「只看简介」）
+  askOtherPerDay: 0,       // 别人每人每天最多让她新看几个（同上）
+  askGroups: '',           // 个别群换一个预设：「群号:预设」，逗号或换行分开；预设见 ASK_PRESETS
   // 冲浪（bili_surf）
   surfModel: '',           // 挑选和总结用的模型「provider/model」（空 = 跟调用它的会话一样）
   surfTaste: '',           // 口味：喜欢看什么、不想看什么（给挑选那一步看）
@@ -163,6 +177,49 @@ export function permFor(cfg, kind, audience) {
   return { key, mode: modeOf(key), label: permLabel(key) };
 }
 
+// 谁叫的：行 = 做什么，列 = 谁叫的，每格一个档位（从严到松）
+export const ASK_LEVELS = Object.freeze(['off', 'brief', 'full']);
+export const ASK_LEVEL_TEXT = Object.freeze({ off: '不看', brief: '只看简介', full: '看' });
+export const ASKERS = Object.freeze([['owner', '主人'], ['friend', '熟人'], ['other', '别人'], ['unknown', '说不清']]);
+const ASKER_TEXT = Object.fromEntries(ASKERS);
+export const ASK_ROWS = Object.freeze([
+  { row: 'look', label: '看视频', cols: { owner: 'askLookOwner', friend: 'askLookFriend', other: 'askLookOther', unknown: 'askLookUnknown' } },
+  { row: 'surf', label: '逛', cols: { owner: 'askSurfOwner', friend: 'askSurfFriend', other: 'askSurfOther', unknown: 'askSurfUnknown' } },
+]);
+// 预设：两行用同一套。设置页一点就填好整张表；「个别群换预设」也用这几个 id
+export const ASK_PRESETS = Object.freeze([
+  ['all', '谁叫都看', { owner: 'full', friend: 'full', other: 'full', unknown: 'full' }],
+  ['brief', '群友只看简介', { owner: 'full', friend: 'full', other: 'brief', unknown: 'brief' }],
+  ['friends', '只看主人和熟人的', { owner: 'full', friend: 'full', other: 'off', unknown: 'off' }],
+  ['owner', '只看主人的', { owner: 'full', friend: 'off', other: 'off', unknown: 'off' }],
+]);
+const ASK_OPTIONS = ASK_LEVELS.map((m) => [m, ASK_LEVEL_TEXT[m]]).reverse();
+const askLabel = (r, col) => `${r.label} · ${ASKER_TEXT[col]}叫的`;
+
+/** 熟人的 QQ 号。 */
+export const friendQQs = (cfg) => new Set(String(cfg.askFriendQQ ?? '').split(/[\s,，]+/).filter((x) => /^\d{5,12}$/.test(x)));
+
+/** 个别群的预设：群号 → 预设 id。 */
+export function askGroupPresets(cfg) {
+  const out = new Map();
+  for (const part of String(cfg.askGroups ?? '').split(/[\n,，]+/)) {
+    const m = part.trim().match(/^(\d{5,12})\s*[:：]\s*([a-z]+)$/);
+    if (m && ASK_PRESETS.some(([id]) => id === m[2])) out.set(m[1], m[2]);
+  }
+  return out;
+}
+
+/**
+ * 这一行（look / surf）对这类来源（owner / friend / other / unknown）是什么档位。
+ * groupId：在哪个群里（个别群换了预设时用那个预设）。
+ */
+export function askLevelFor(cfg, row, asker, groupId = '') {
+  const preset = groupId ? askGroupPresets(cfg).get(String(groupId)) : null;
+  if (preset) return ASK_PRESETS.find(([id]) => id === preset)[2][asker] ?? 'off';
+  const key = ASK_ROWS.find((r) => r.row === row)?.cols[asker];
+  return ASK_LEVELS.includes(cfg[key]) ? cfg[key] : 'off';
+}
+
 /** 自己人：主人 + 其他自己人。 */
 export function friendSet(cfg) {
   const s = new Set(String(cfg.friendMids ?? '').split(/[\s,，]+/).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0));
@@ -219,6 +276,11 @@ export const FIELDS = Object.freeze([
   { key: 'videoSource', group: 'watch', type: 'enum', options: [['auto', '插件自己下（失败再用 yt-dlp）'], ['ytdlp', 'yt-dlp（失败再自己下）']], label: '视频从哪下', hint: '插件自己下不需要装 yt-dlp；两种都会在失败时换另一种' },
   { key: 'scanQuality', group: 'watch', type: 'enum', options: [['360', '360P（最快）'], ['480', '480P'], ['720', '720P（要登录）']], label: '整片分镜的清晰度', hint: '一格只有几百像素宽，480P 已经够用；看小字靠放大看（登录后 1080P）' },
   { key: 'useLogin', group: 'watch', type: 'bool', label: '有登录信息时使用', hint: 'AI 字幕、AI 总结、1080P 放大' },
+  ...ASK_ROWS.flatMap((r) => Object.entries(r.cols).map(([col, key]) => ({ key, group: 'ask', type: 'enum', options: ASK_OPTIONS, row: r.row, col, label: askLabel(r, col) }))),
+  { key: 'askFriendQQ', group: 'ask', type: 'text', max: 600, multiline: true, pattern: /^[\d\s,，]*$/, patternHint: '只写 QQ 号，用逗号或换行分开', label: '熟人的 QQ', hint: '主人的小号、信得过的群友。表里「熟人」那一列管他们' },
+  { key: 'askFriendPerDay', group: 'ask', type: 'int', min: 0, max: 1000, unit: '个', label: '熟人每人每天最多让她看', hint: '只算新看的（看过的再看不算）；超了「看」降成「只看简介」。0 = 不限' },
+  { key: 'askOtherPerDay', group: 'ask', type: 'int', min: 0, max: 1000, unit: '个', label: '别人每人每天最多让她看', hint: '同上。群里人多、怕费 token 的，可以设成 3' },
+  { key: 'askGroups', group: 'ask', type: 'text', max: 1000, multiline: true, pattern: /^(\s*\d{5,12}\s*[:：]\s*(all|brief|friends|owner)\s*([,，\n]|$))*\s*$/, patternHint: '每项写成「群号:预设」', label: '个别群换预设', hint: '这些群不看上面的表，用指定的预设（两行都按它）' },
   { key: 'maxPerHour', group: 'limits', type: 'int', min: 1, max: 1000, unit: '个', label: '每小时最多新看几个视频', hint: '缓存命中不算；放大看的上限是它的 2 倍' },
   { key: 'maxFindPerHour', group: 'limits', type: 'int', min: 1, max: 1000, unit: '次', label: '每小时最多搜几次' },
   { key: 'cacheHours', group: 'limits', type: 'int', min: 0, max: 720, unit: '小时', label: '结果缓存多久', hint: '同一视频同一段再看直接用缓存；0 = 不用缓存' },

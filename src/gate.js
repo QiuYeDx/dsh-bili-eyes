@@ -7,7 +7,7 @@
 //   dsh-qq：插件自己当 dsh-qq 桥接的门卫（adapters/dsh-qq.js），读桥接目录、调 OneBot 和桥接控制台
 //   builtin：只用内置的
 // 协议（动作、字段、返回值）见 docs/门卫协议.md。门卫没响应、返回不对时一律按「不可信 / 没同意 / 没转达」处理。
-export const PROTOCOL = 1;
+export const PROTOCOL = 2;
 export const SERVICE_NAME = 'biliEyesGate';
 export const DEFAULT_UNTRUSTED_PRESETS = 'qq|wechat|weixin|wx|onebot|napcat|bot|group';
 import { dshQqGate } from './adapters/dsh-qq.js';
@@ -143,6 +143,30 @@ export async function ownerMessages(cfg, who, since, opts = {}) {
     const j = await call(cfg, { action: 'ownerMessages', sessionId: info.sessionId, since: Number(since) || 0, session: sessionFields(info.chain) }, opts);
     if (!Array.isArray(j?.messages)) return null;
     return j.messages.map((m) => ({ at: Number(m.at) || 0, text: String(m.text ?? '') })).filter((m) => m.at >= since);
+  } catch { return null; }
+}
+
+/**
+ * 这个会话最近的消息（v2）：认「这个视频是谁叫她看的」用。返回 {chat, messages}；
+ * 内置门卫、不支持这个动作的门卫、出错时返回 null（插件按「说不清」算）。
+ */
+export async function recentMessages(cfg, who, since, opts = {}) {
+  if (gateKind(cfg, opts) === 'builtin') return null;
+  const info = sessionInfo(who, opts.sessions);
+  try {
+    const j = await call(cfg, { action: 'recentMessages', sessionId: info.sessionId, since: Number(since) || 0, session: sessionFields(info.chain) }, { timeoutMs: 6000, ...opts });
+    if (!Array.isArray(j?.messages)) return null;
+    const chat = j.chat && /^(group|private)$/.test(j.chat.type) ? { type: j.chat.type, id: String(j.chat.id ?? '') } : null;
+    const messages = j.messages.map((m) => ({
+      id: String(m?.id ?? ''),
+      at: Number(m?.at) || 0,
+      sender: { id: String(m?.sender?.id ?? ''), name: String(m?.sender?.name ?? ''), isOwner: m?.sender?.isOwner === true, trusted: m?.sender?.trusted === true },
+      text: String(m?.text ?? ''),
+      links: Array.isArray(m?.links) ? m.links.map(String) : [],
+      replyTo: String(m?.replyTo ?? ''),
+      atSelf: m?.atSelf === true,
+    })).filter((m) => m.sender.id && m.at >= since);
+    return { chat, messages };
   } catch { return null; }
 }
 

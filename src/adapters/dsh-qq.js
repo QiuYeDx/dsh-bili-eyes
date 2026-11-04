@@ -6,6 +6,7 @@
 // 门卫的三件事：
 //   context        DSH 会话 id → 桥接会话 key：private:<主人QQ> 可信，群和别人的私聊不可信
 //   ownerMessages  用 OneBot 取主人的原话（和她的私聊；草稿在群里起的，再加上那个群）
+//   recentMessages 用 OneBot 取这个会话最近带链接、@ 她或引用回复的消息（认「这个视频是谁叫她看的」）
 //   notify         改写桥接里停用的定时任务（「B站收件箱」「B站推荐」，没有就建）再立即运行，让她在主人私聊里醒来；
 //                  桥接不通时用 OneBot 直接私聊主人一句，至少消息不丢
 import fs from 'node:fs';
@@ -61,6 +62,39 @@ export function bridgeKeyOf(dir, sessionId) {
 
 const msgText = (m) => (m?.message ?? []).filter((x) => x.type === 'text').map((x) => x.data?.text ?? '').join('').trim();
 
+// 分享卡片（json 段）里的链接：和桥接补丁还原卡片时读同样的字段（qqdocurl / jumpUrl / url）
+function cardLinks(seg) {
+  try {
+    const j = typeof seg.data?.data === 'string' ? JSON.parse(seg.data.data) : (seg.data?.data ?? {});
+    const out = [];
+    for (const m of Object.values(j?.meta ?? {})) for (const k of ['qqdocurl', 'jumpUrl', 'url']) if (typeof m?.[k] === 'string' && /^https?:/i.test(m[k])) out.push(m[k].replace(/&amp;/g, '&'));
+    return out;
+  } catch { return []; }
+}
+const URL_IN_TEXT = /https?:\/\/[^\s<>"'，。】）)]+/gi;
+
+/**
+ * OneBot 消息记录 → 门卫协议的 recentMessages 条目。只留插件用得上的：带链接或 BV / av 号、@ 了她、引用回复了别人。
+ * selfId 是她自己的 QQ：@ 她、引用她的消息都算 atSelf；她自己发的不返回。
+ */
+export function toRecent(list, { ownerQQ, selfId, since = 0 }) {
+  const all = (list ?? []).map((m) => ({ m, id: String(m.message_id ?? ''), uid: String(m.sender?.user_id ?? m.user_id ?? '') }));
+  const byId = new Map(all.map((x) => [x.id, x]));
+  const out = [];
+  for (const { m, id, uid } of all) {
+    const at = Number(m.time) * 1000;
+    if (!(at >= since) || !uid || uid === selfId) continue;
+    const segs = m.message ?? [];
+    const text = msgText(m);
+    const links = [...new Set([...(text.match(URL_IN_TEXT) ?? []), ...segs.filter((x) => x.type === 'json').flatMap(cardLinks)])];
+    const replyTo = String(segs.find((x) => x.type === 'reply')?.data?.id ?? '');
+    const atSelf = Boolean(selfId) && (segs.some((x) => x.type === 'at' && String(x.data?.qq) === selfId) || byId.get(replyTo)?.uid === selfId);
+    if (!links.length && !/BV[0-9A-Za-z]{10}|\bav\d+/i.test(text) && !atSelf && !replyTo) continue;
+    out.push({ id, at, sender: { id: uid, name: String(m.sender?.card || m.sender?.nickname || uid), isOwner: Boolean(ownerQQ) && uid === ownerQQ }, text: text.slice(0, 300), links, replyTo, atSelf });
+  }
+  return out;
+}
+
 /**
  * 门卫服务（和 biliEyesGate 进程内服务同一套方法）。
  * @param {{qqBridgeDir:string}} cfg
@@ -97,8 +131,15 @@ export function dshQqGate(cfg, { log = () => {}, fetchImpl = fetch } = {}) {
     await f(`${api}/tasks/${task.id}/run`, { method: 'POST', body: {}, headers: H, timeoutMs: 15_000 });
   };
 
+  // 她自己的 QQ（OneBot 的消息记录里没有 self_id）；拿一次就记住
+  let selfId = '';
+  const self = async (s) => {
+    if (!selfId) selfId = String((await oneBot(s, 'get_login_info', {}).catch(() => null))?.user_id ?? '');
+    return selfId;
+  };
+
   return {
-    async hello() { return { protocol: 1, actions: ['hello', 'context', 'ownerMessages', 'notify'], name: 'dsh-qq 适配（插件内置）' }; },
+    async hello() { return { protocol: 2, actions: ['hello', 'context', 'ownerMessages', 'recentMessages', 'notify'], name: 'dsh-qq 适配（插件内置）' }; },
     async context({ sessionId }) {
       const s = settings();
       if (sessionId === 'gate-test') return { trusted: false, label: s.ownerQQ ? `dsh-qq 桥接（主人 QQ ${s.ownerQQ.slice(0, 3)}…）` : 'dsh-qq 桥接（没读到主人 QQ）' };
@@ -123,6 +164,16 @@ export function dshQqGate(cfg, { log = () => {}, fetchImpl = fetch } = {}) {
       const key = bridgeKeyOf(dir, String(sessionId ?? ''));
       if (key.startsWith('group:')) take((await oneBot(s, 'get_group_msg_history', { group_id: Number(key.slice(6)), count: 30 }))?.messages);
       return { messages: out.filter((m) => m.text) };
+    },
+    async recentMessages({ sessionId, since }) {
+      const s = settings();
+      const key = bridgeKeyOf(dir, String(sessionId ?? ''));
+      const m = /^(group|private):(\d+)$/.exec(key);
+      if (!m) return { chat: null, messages: [] };
+      const list = m[1] === 'group'
+        ? (await oneBot(s, 'get_group_msg_history', { group_id: Number(m[2]), count: 50 }))?.messages
+        : (await oneBot(s, 'get_friend_msg_history', { user_id: Number(m[2]), count: 30 }))?.messages;
+      return { chat: { type: m[1], id: m[2] }, messages: toRecent(list, { ownerQQ: s.ownerQQ, selfId: await self(s), since: Number(since) || 0 }) };
     },
     async notify({ kind, text, items }) {
       const s = settings();

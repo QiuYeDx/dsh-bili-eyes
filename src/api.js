@@ -7,7 +7,7 @@ import path from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import QRCode from 'qrcode';
 import { BiliClient } from './bili-api.js';
-import { loadConfig, saveConfig, DEFAULTS, FIELDS, CONFIG_FILE, DATA_DIR, DSH_HOME, PERM_ROWS, AUDIENCES, MODE_TEXT, permFor } from './config.js';
+import { loadConfig, saveConfig, DEFAULTS, FIELDS, CONFIG_FILE, DATA_DIR, DSH_HOME, PERM_ROWS, AUDIENCES, MODE_TEXT, permFor, ASK_PRESETS } from './config.js';
 import { loadCredential, saveCredential, removeCredential, qrGenerate, qrPoll } from './credential.js';
 import { readHistory, clearHistory } from './history.js';
 import { look, lookZoom, find, usage, resetLoginCache, makeClient, InputError } from './look.js';
@@ -216,8 +216,8 @@ async function getView(view, ctx, q = new URLSearchParams()) {
     };
   }
   if (view === 'history') {
-    const from = daysSince(q); const kind = pick(q, 'kind'); const source = pick(q, 'source');
-    const all = readHistory(1000).filter((e) => e.at >= from && (!kind || e.kind === kind) && (!source || e.source === source));
+    const from = daysSince(q); const kind = pick(q, 'kind'); const source = pick(q, 'source'); const asker = pick(q, 'asker');
+    const all = readHistory(1000).filter((e) => e.at >= from && (!kind || e.kind === kind) && (!source || e.source === source) && (!asker || e.ask?.asker === asker));
     const limit = limitOf(q);
     return { items: all.slice(0, limit), total: all.length };
   }
@@ -241,7 +241,12 @@ async function getView(view, ctx, q = new URLSearchParams()) {
     const st = cfg.autoSurfOn ? ensurePlan(loadAuto(), cfg, Date.now()) : loadAuto();
     return { on: cfg.autoSurfOn, day: st.day, slots: cfg.autoSurfOn ? st.slots : [], done: st.done, runs: st.runs.slice(0, 15), gate: gateKind(cfg) !== 'builtin' };
   }
-  if (view === 'config') return { config: cfg, defaults: DEFAULTS, fields: FIELDS, configFile: CONFIG_FILE };
+  if (view === 'config') return { config: cfg, defaults: DEFAULTS, fields: FIELDS, configFile: CONFIG_FILE, askPresets: ASK_PRESETS };
+  // 「谁叫的」靠门卫认人：现在的门卫能不能给消息记录（recentMessages，协议 v2）
+  if (view === 'askGate') {
+    const hi = await hello(cfg);
+    return { kind: hi.kind, name: hi.name, protocol: hi.protocol, supports: hi.actions.includes('recentMessages') };
+  }
   if (view === 'inbox') {
     const st = loadInbox();
     const status = pick(q, 'status');   // open = 待处理（新的和已转达的）；空 = 全部

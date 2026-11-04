@@ -150,6 +150,14 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
 .be-pm-legend dt{flex:none;font-weight:600}
 .be-pm-legend dd{margin:0;color:var(--t3)}
 .be-pm-legend .lv-off{color:var(--t2)}.be-pm-legend .lv-asked,.be-pm-legend .lv-approve{color:var(--brand)}.be-pm-legend .lv-auto{color:var(--pink)}
+.be-pm-grid.c4{grid-template-columns:minmax(92px,auto) repeat(4,minmax(0,1fr))}
+.be-lv.lv-brief{color:var(--brand);border-color:color-mix(in srgb,var(--brand) 30%,var(--bd));background-color:color-mix(in srgb,var(--brand) 6%,var(--b1))}
+.be-lv.lv-full{color:var(--pink);border-color:color-mix(in srgb,var(--pink) 32%,var(--bd));background-color:color-mix(in srgb,var(--pink) 5%,var(--b1))}
+.be-pm-legend .lv-brief{color:var(--brand)}.be-pm-legend .lv-full{color:var(--pink)}
+.be-gp{display:flex;flex-direction:column;gap:6px}
+.be-gp-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.be-gp-row .be-input{flex:0 1 150px;min-width:0}
+.be-gp-row .be-select{flex:0 1 180px;min-width:0}
 @container (max-width:520px){
 .be-pm-grid{grid-template-columns:1fr;row-gap:0}
 .be-pm-grid>.hd{display:none}
@@ -162,6 +170,7 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
 .be-pm-note{display:none}
 .be-pm-aud{display:block;flex:0 0 112px}
 .be-pm-legend{grid-template-columns:1fr}
+.be-pm-grid.c4{grid-template-columns:1fr}
 }
 @media (max-width:560px){.be-fields{grid-template-columns:1fr}}
 .be-input,.be-select{font:inherit;font-size:14px;color:var(--t1);background:var(--b1);border:1px solid var(--bd);border-radius:var(--rs);padding:6px 10px;min-width:0;width:100%;box-sizing:border-box}
@@ -533,6 +542,11 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
     const KIND = { look: ['看', 'brand'], zoom: ['放大', 'brand'], find: ['搜', ''], file: ['本机视频', 'pink'], feed: ['刷列表', ''], surf: ['逛一圈', 'pink'], comments: ['评论区', ''] };
     const SOURCE = { tool: '她', ui: '设置页', plugin: '插件', auto: '自己逛', cli: '命令行', other: '' };
 
+    // 「谁叫的 · 依据」：小明 · 别人 · 发了链接
+    const ASKER_TEXT = { owner: '主人', friend: '熟人', other: '别人', unknown: '说不清' };
+    const HOW_TEXT = { trusted: '主人的会话', posted: '发了链接', replied: '引用回复', woke: '@ 了她', private: '私聊', none: '找不到是谁', nogate: '门卫认不出人' };
+    const askText = (a) => ['谁叫的：' + (a.who && a.asker !== 'owner' ? `${a.who}（${ASKER_TEXT[a.asker] ?? a.asker}）` : ASKER_TEXT[a.asker] ?? a.asker), HOW_TEXT[a.how] ?? a.how, a.group && `群 ${a.group}`].filter(Boolean).join(' · ');
+
     function HistoryRow({ e }) {
       const [label, cls] = KIND[e.kind] ?? [e.kind, ''];
       const url = videoUrl(e);
@@ -542,11 +556,13 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
         if (e.duration) meta.push(e.to != null || e.from ? `${fmtDur(e.from || 0)}–${fmtDur(e.to ?? e.duration)} / ${fmtDur(e.duration)}` : fmtDur(e.duration));
         if (e.sheets) meta.push(`${e.sheets} 张图`);
       }
-      if (e.ms != null) meta.push(fmtMs(e.ms));
+      if (e.ms != null && !e.skipped) meta.push(fmtMs(e.ms));
       if (e.cached) meta.push('用了缓存');
+      if (e.ask) meta.push(askText(e.ask));
+      const status = !e.ok ? ['失败', 'bad'] : e.skipped ? [e.kind === 'surf' ? '没逛' : '没看', 'dim'] : e.ask?.level === 'brief' || e.brief ? [e.kind === 'surf' ? '快速逛' : '只看简介', 'dim'] : null;
       return h(Entry, {
         kind: [label, cls], ctx: SOURCE[e.source] && h('span', { className: 'be-ctx' }, SOURCE[e.source]),
-        status: !e.ok && ['失败', 'bad'], at: e.at, error: !e.ok && e.error, meta,
+        status, at: e.at, error: !e.ok && e.error, meta,
       },
       url ? h('a', { href: url, target: '_blank', rel: 'noreferrer' }, e.title || e.bvid) : (e.title || '—'),
       e.ok && e.note && h('div', { className: 'be-faint' }, e.note));
@@ -613,8 +629,9 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
 
     const HIST_KINDS = [['', '全部类型'], ['look', '看'], ['zoom', '放大'], ['find', '搜'], ['feed', '刷列表'], ['surf', '逛一圈'], ['comments', '评论区'], ['file', '本机视频']];
     const HIST_SOURCES = [['', '全部来源'], ['tool', '她'], ['ui', '设置页'], ['plugin', '插件'], ['auto', '自己逛'], ['cli', '命令行']];
+    const HIST_ASKERS = [['', '谁叫的都算'], ['owner', '主人叫的'], ['friend', '熟人叫的'], ['other', '别人叫的'], ['unknown', '说不清的']];
     function WatchLog({ toast, active }) {
-      const [f, setF] = useState({ kind: '', source: '', days: '7' });
+      const [f, setF] = useState({ kind: '', source: '', asker: '', days: '7' });
       const st = usePaged('history', f);
       useRefreshOnShow(active, st.reload);
       const set = (k) => (v) => setF({ ...f, [k]: v });
@@ -622,14 +639,34 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
         h('div', { className: 'be-tools' },
           h(Pick, { options: HIST_KINDS, value: f.kind, onChange: set('kind'), label: '类型' }),
           h(Pick, { options: HIST_SOURCES, value: f.source, onChange: set('source'), label: '来源' }),
+          h(Pick, { options: HIST_ASKERS, value: f.asker, onChange: set('asker'), label: '谁叫的' }),
           h(Seg, { options: RANGES, value: f.days, onChange: set('days'), small: true, label: '时间范围' }),
           h('span', { className: 'sp' }),
           h(ConfirmBtn, { label: '清空记录', confirmLabel: '确认清空？', onConfirm: () => api.post('clearHistory').then(() => { toast('记录已清空'); st.reload(); }, (e) => toast(e.message, true)) })),
         h(ListBox, { st, empty: '这段时间没有记录。' }, (e, i) => h(HistoryRow, { key: `${e.at}-${i}`, e })));
     }
 
+    // 谁叫的：认人靠门卫给的消息记录，先说清现在的门卫能不能认
+    function AskGateNote({ active }) {
+      const st = useView('askGate');
+      useRefreshOnShow(active, st.reload);
+      const d = st.data;
+      if (!d) return null;
+      const text = d.supports
+        ? `✓ 现在的门卫（${d.name || d.kind}）能认出群里是谁发的视频、谁叫她看的。`
+        : d.kind === 'builtin'
+          ? '现在用的是内置门卫，认不出 QQ 群里是谁叫的：桥接会话一律算「说不清」，DSH 本机窗口算主人。用 dsh-qq 接 QQ 的，到「收件箱 → 设置 → 门卫」把门卫来源选成 dsh-qq。'
+          : `现在的门卫（${d.name || d.kind}，协议 v${d.protocol}）不支持认人（recentMessages），群里一律算「说不清」，主人私聊照常算主人。`;
+      return h('div', { className: d.supports ? 'be-ok' : 'be-no', style: { marginBottom: 12 } }, text);
+    }
+    function AskPanel({ toast, active }) {
+      return h(React.Fragment, null,
+        h(AskGateNote, { active }),
+        h(ConfigGroups, { groups: [['ask', '谁叫的', '群里谁发的视频、谁叫她看、谁叫她逛，按这张表定看不看、怎么看。是谁由插件按 QQ 消息记录判断：谁发了这个视频、谁引用回复它并 @ 她；几个人都沾边时按最宽的算。只管她自己调用的；设置页试看、自己逛不受影响。']], toast, footer: true }));
+    }
+
     function WatchPage({ toast, active, sub, setSub }) {
-      return h(SubPages, { items: [['try', '试看', Try], ['log', '记录', WatchLog]], sub, setSub, active, props: { toast } });
+      return h(SubPages, { items: [['try', '试看', Try], ['log', '记录', WatchLog], ['who', '谁叫的', AskPanel]], sub, setSub, active, props: { toast } });
     }
 
     // ── 试看 ─────────────────────────────────────────────────────────────────
@@ -814,6 +851,56 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
         h('dl', { className: 'be-pm-legend' }, PERM_LEVELS.map(([k, l, d]) => h('div', { key: k }, h('dt', { className: `lv-${k}` }, l), h('dd', null, d)))));
     }
 
+    // 谁叫的：行 = 看视频 / 逛，列 = 谁叫的，每格一个档位（见 docs/群聊省额度-设计.md）。预设来自服务端（config.js 的 ASK_PRESETS）
+    const ASK_COLS = [['owner', '主人', '主人 QQ 发的或叫的；主人私聊、DSH 本机窗口也算'], ['friend', '熟人', '下面「熟人的 QQ」里的人'], ['other', '别人', '其他群友、别人的私聊'], ['unknown', '说不清', '找不到是谁叫的，或者门卫认不出人']];
+    const ASK_LEVELS = [['full', '看', '照常看：分镜图、台词、热评'], ['brief', '只看简介', '标题、简介、AI 总结、热评，不出分镜；逛就快速逛一圈'], ['off', '不看', '不看，告诉她一句为什么']];
+    const ASK_ROW_NOTE = { look: '含放大看', surf: 'bili_surf' };
+    function AskTable({ fields, presets, draft, saved, onChange }) {
+      if (!fields.length) return h('div', { className: 'be-err' }, '插件已经更新，但 DSH 里跑的还是旧版本，这张表要重启 DSH 才能用。');
+      const rows = [];
+      for (const f of fields) {
+        let r = rows.find((x) => x.row === f.row);
+        if (!r) { r = { row: f.row, label: f.label.split(' · ')[0], cells: {} }; rows.push(r); }
+        r.cells[f.col] = f;
+      }
+      const lv = (f) => h('select', {
+        className: `be-lv lv-${draft[f.key]}${draft[f.key] !== saved[f.key] ? ' changed' : ''}`, value: draft[f.key], 'aria-label': f.label,
+        onChange: (e) => onChange({ [f.key]: e.target.value }),
+      }, f.options.map(([v, l]) => h('option', { key: v, value: v }, l)));
+      const current = presets.find(([, , p]) => fields.every((f) => draft[f.key] === p[f.col]));
+      const usePreset = (id) => { const p = presets.find((x) => x[0] === id)[2]; onChange(Object.fromEntries(fields.map((f) => [f.key, p[f.col]]))); };
+      return h('div', { className: 'be-pm' },
+        h('div', { className: 'be-pm-bar' }, h('span', null, '预设'),
+          h(Seg, { options: presets.map(([id, l]) => [id, l]), value: current?.[0] ?? '', onChange: usePreset, small: true, label: '谁叫的预设' }),
+          !current && h('span', { className: 'be-faint' }, '自定义')),
+        h('div', { className: 'be-pm-grid c4', role: 'table', 'aria-label': '谁叫的' },
+          h('div', { className: 'hd', role: 'columnheader' }),
+          ASK_COLS.map(([c, l, hint]) => h('div', { key: c, className: 'hd', role: 'columnheader', title: hint }, l)),
+          rows.map((r, i) => h('div', { key: r.row, className: `be-pm-row${i === 0 ? ' first' : ''}`, role: 'row' },
+            h('div', { className: 'be-pm-op', role: 'rowheader' }, r.label, ASK_ROW_NOTE[r.row] && h('small', null, ASK_ROW_NOTE[r.row])),
+            ASK_COLS.map(([c, l]) => h('div', { key: c, className: 'be-pm-cell', role: 'cell' }, h('span', { className: 'be-pm-aud' }, l), r.cells[c] && lv(r.cells[c])))))),
+        h('dl', { className: 'be-pm-legend' }, ASK_LEVELS.map(([k, l, d]) => h('div', { key: k }, h('dt', { className: `lv-${k}` }, l), h('dd', null, d)))));
+    }
+
+    // 个别群换预设：一行一个群。存成「群号:预设」，一行一个
+    function GroupPresetsField({ fld, value, presets, onChange }) {
+      const parse = (v) => String(v ?? '').split(/[\n,，]+/).map((x) => x.trim().match(/^(\d*)\s*[:：]\s*([a-z]+)$/)).filter(Boolean).map((m) => ({ gid: m[1], preset: m[2] }));
+      const [rows, setRows] = useState(() => parse(value));
+      const out = (list) => list.filter((r) => /^\d{5,12}$/.test(r.gid)).map((r) => `${r.gid}:${r.preset}`).join('\n');
+      // 保存、恢复默认后外面的值变了：跟着变（自己正在编辑的半截行不丢）
+      useEffect(() => { if (out(rows) !== String(value ?? '')) setRows(parse(value)); }, [value]);
+      const set = (list) => { setRows(list); onChange(out(list)); };
+      const bad = rows.some((r) => r.gid && !/^\d{5,12}$/.test(r.gid));
+      return h(Field, { label: fld.label, hint: fld.hint, wide: true },
+        h('div', { className: 'be-gp' },
+          rows.map((r, i) => h('div', { key: i, className: 'be-gp-row' },
+            h('input', { className: 'be-input mono', inputMode: 'numeric', value: r.gid, placeholder: '群号', 'aria-label': '群号', onChange: (e) => set(rows.map((x, j) => (j === i ? { ...x, gid: e.target.value.replace(/\D/g, '').slice(0, 12) } : x))) }),
+            h('select', { className: 'be-select', value: r.preset, 'aria-label': '预设', onChange: (e) => set(rows.map((x, j) => (j === i ? { ...x, preset: e.target.value } : x))) }, presets.map(([id, l]) => h('option', { key: id, value: id }, l))),
+            h('button', { type: 'button', className: 'be-link', onClick: () => set(rows.filter((_, j) => j !== i)) }, '删掉'))),
+          h('div', null, h(Btn, { onClick: () => setRows([...rows, { gid: '', preset: presets[1]?.[0] ?? 'all' }]) }, '加一个群')),
+          bad && h('div', { className: 'be-no' }, '群号是 5~12 位数字')));
+    }
+
     /** 几组设置项。groups: [[分组, 标题, 说明]]；actions: {分组: (保存后的配置) => 额外按钮} */
     function ConfigGroups({ groups, toast, actions = {}, footer = false, onSaved }) {
       const st = useView('config');
@@ -838,7 +925,13 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
             return h(Card, { key: group, id: `be-g-${group}`, title: label, desc, aside: dirty ? '有未保存的修改' : '' },
               group === 'perm'
                 ? h(PermTable, { fields: list, draft, saved, onChange: (patch) => setDraft({ ...draft, ...patch }) })
-                : h('div', { className: 'be-fields' }, list.map((fld) => h(FieldInput, { key: fld.key, fld, value: draft[fld.key], def: d.defaults[fld.key], onChange: (v) => setDraft({ ...draft, [fld.key]: v }) }))),
+                : group === 'ask'
+                  ? h(React.Fragment, null,
+                    h(AskTable, { fields: list.filter((x) => x.row), presets: d.askPresets ?? [], draft, saved, onChange: (patch) => setDraft({ ...draft, ...patch }) }),
+                    h('div', { className: 'be-fields' }, list.filter((x) => !x.row).map((fld) => (fld.key === 'askGroups'
+                      ? h(GroupPresetsField, { key: fld.key, fld, value: draft[fld.key], presets: d.askPresets ?? [], onChange: (v) => setDraft({ ...draft, [fld.key]: v }) })
+                      : h(FieldInput, { key: fld.key, fld, value: draft[fld.key], def: d.defaults[fld.key], onChange: (v) => setDraft({ ...draft, [fld.key]: v }) })))))
+                  : h('div', { className: 'be-fields' }, list.map((fld) => h(FieldInput, { key: fld.key, fld, value: draft[fld.key], def: d.defaults[fld.key], onChange: (v) => setDraft({ ...draft, [fld.key]: v }) }))),
               h('div', { className: 'be-row' },
                 h(Btn, { kind: 'primary', disabled: !dirty, onClick: () => save(group, label) }, '保存'),
                 h(Btn, { onClick: () => reset(group) }, '恢复默认'),
