@@ -1498,7 +1498,7 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
     const stickerImg = (id) => `${ROUTE}?${new URLSearchParams({ view: 'img', src: 'sticker', id: String(id) })}`;
     const splitPicks = (s) => String(s ?? '').split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
     const pkgIds = (s) => new Set(String(s ?? '').split(/[,，\s]+/).map(Number).filter((n) => n > 0));
-    const SAVED_EMOTE = '表情已保存。不能用的表情马上就不让用了；她能看到的表情列表要重启 DSH 才更新。';
+    const SAVED_EMOTE = '表情已保存，马上生效：她下一句话起就看到新的表情列表。';
 
     // 记录、草稿里把表情代码显示成图：代码 → {url, size}，整个页面只读一次
     let emoMapPromise = null;
@@ -1584,7 +1584,7 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
         const rd = new FileReader();
         rd.onload = () => {
           fetch(`${ROUTE}?upload=sticker`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'stickerAdd', name: form.name, when: form.when, data: String(rd.result) }) })
-            .then(unwrap).then((r) => { onData(r); setForm({ name: '', when: '', file: null }); if (fileRef.current) fileRef.current.value = ''; toast(`加好了。${SAVED_EMOTE.replace('表情已保存。不能用的表情马上就不让用了；', '')}`); }, (er) => toast(er.message, true)).finally(() => setBusy(false));
+            .then(unwrap).then((r) => { onData(r); setForm({ name: '', when: '', file: null }); if (fileRef.current) fileRef.current.value = ''; toast('加好了，她下一句话起就能用'); }, (er) => toast(er.message, true)).finally(() => setBusy(false));
         };
         rd.onerror = () => { setBusy(false); toast('读不了这个文件', true); };
         rd.readAsDataURL(form.file);
@@ -1600,7 +1600,7 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
               h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minWidth: 0 } },
                 h('input', { className: 'be-input', value: editing.name, maxLength: 8, placeholder: '名字（8 字内）', 'aria-label': '名字', onChange: (ev) => setEditing({ ...editing, name: ev.target.value }) }),
                 h('input', { className: 'be-input', value: editing.when, maxLength: 30, placeholder: '什么时候用（30 字内）', 'aria-label': '什么时候用', onChange: (ev) => setEditing({ ...editing, when: ev.target.value }) }),
-                h('div', { className: 'be-row' }, h(Btn, { kind: 'primary', onClick: () => post('stickerUpdate', editing, '改好了。重启 DSH 后她才看得到新的名字和说明') }, '保存'), h(Btn, { onClick: () => setEditing(null) }, '取消'))))
+                h('div', { className: 'be-row' }, h(Btn, { kind: 'primary', onClick: () => post('stickerUpdate', editing, '改好了，她下一句话起就看到新的名字和说明') }, '保存'), h(Btn, { onClick: () => setEditing(null) }, '取消'))))
             : h('div', { className: 'be-stk' }, h('img', { src: stickerImg(x.id), alt: x.name, loading: 'lazy' }),
               h('div', { style: { flex: 1, minWidth: 0 } },
                 h('div', { className: 'be-et' }, x.name),
@@ -1627,7 +1627,7 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
         else st.reload();
       };
       return h(Loading, { state: st }, () => data && h(React.Fragment, null,
-        data.stale && h('div', { className: 'be-stale', role: 'status' }, '表情设置改过了，重启 DSH 后她才看得到新的表情列表。不能用的表情已经马上不让用了。'),
+        data.stale && h('div', { className: 'be-stale', role: 'status' }, '表情设置改过了，但她的工具说明没更新上（插件没在 DSH 里加载，或者更新失败）。重启 DSH 就好；不能用的表情已经不让用了。'),
         h(ConfigGroups, {
           groups: [
             ['emote', '表情', 'B站自带的表情（[doge]、大表情、颜文字），评论、回复、私信、动态里都能用。认不出的代码（比如 [狗头]）、关掉的系列里的、超过上限的，发之前都会去掉，不会显示成方括号文字。'],
@@ -1635,7 +1635,7 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
           ],
           toast, footer: true, onSaved,
           savedText: (group) => (group === 'emote' || group === 'sticker' ? SAVED_EMOTE : null),
-          footerText: '能不能用马上生效；她看到的表情列表和表情包说明要重启 DSH 才更新。',
+          footerText: '保存后立即生效，她下一句话起就看到新的表情列表和表情包，不用重启 DSH。',
           render: {
             emote: ({ list, draft, set, d }) => h('div', { className: 'be-fields' },
               list.filter((f) => !f.custom).map((fld) => h(FieldInput, { key: fld.key, fld, value: draft[fld.key], def: d.defaults[fld.key], onChange: (v) => set({ [fld.key]: v }) })),

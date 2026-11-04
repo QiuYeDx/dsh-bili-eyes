@@ -194,7 +194,7 @@ async function getView(view, ctx, q = new URLSearchParams()) {
         { id: 'gate', ok: true, optional: gk === 'builtin', label: { service: '门卫：桥接插件提供', 'dsh-qq': `门卫：dsh-qq 桥接（${cfg.qqBridgeDir}）`, http: `门卫：${cfg.gateUrl}`, builtin: '门卫：内置（按会话的 agentPreset / 工作目录判断）' }[gk], hint: (gk === 'builtin' ? '内置门卫只是推断：本机会话「先问主人」时弹 DSH 审批卡片；桥接会话只能起草、在「互动 → 待同意」里同意；收件箱没处转达。接 QQ 等桥接时最好让桥接提供门卫（docs/门卫协议.md）。' : '') + (judged.length ? ` 最近的会话：${judged.slice(0, 4).map((j) => `${j.label}${j.trusted ? '✓' : '✗'}`).join('，')}` : '') },
         { id: 'inbox', ok: cfg.inboxOn, optional: true, label: cfg.inboxOn ? `收件箱：每 ${cfg.inboxIntervalSeconds} 秒查一次${cfg.inboxQuiet ? `，${cfg.inboxQuiet} 不查` : ''}` : '收件箱没开', hint: cfg.inboxOn ? (gk === 'builtin' ? '没接门卫：新消息不会主动转达，她下次用 B站工具时会提一句' : '') : '可选：在「收件箱 → 设置」里打开后，别人回复、@、私信会转达给她' },
         { id: 'disk', ok: !onC(mediaDirOf(cfg)), optional: true, label: `下载的视频放在 ${mediaDirOf(cfg)}`, hint: onC(mediaDirOf(cfg)) ? '在系统盘：视频多了占地方，可以在「设置 → 存储」换到别的盘' : '' },
-        ...(emoteStale(cfg, loadStickers().list) ? [{ id: 'emote', ok: false, optional: true, label: '表情设置改过了，重启 DSH 后她才看得到新的表情列表', hint: '不能用的表情已经马上不让用了；新开的系列、新标的常用、新加的表情包，要重启 DSH 才写进她的工具说明（「互动 → 表情」）' }] : []),
+        ...(registered && emoteStale(cfg, loadStickers().list) && !ctx.refreshTools?.() ? [{ id: 'emote', ok: false, optional: true, label: '表情设置改过了，但她的工具说明没更新上', hint: '平时改了马上就会更新；这次没更新上（看 DSH 日志里的「更新评论工具的说明失败」）。重启 DSH 就好。不能用的表情已经不让用了' }] : []),
         { id: 'asr', ok: asr.ok, optional: true, label: asr.ok ? `语音识别：${asr.baseUrl}${asr.model ? `（${asr.model}）` : ''}${asr.managed ? '，用到时自动拉起' : ''}` : '没配置语音识别', hint: asr.ok ? '' : '可选：没有字幕的视频就没有台词。在「设置 → 语音识别」里配：硅基流动填个 API Key 就行，也可以用本机服务' },
       ],
       todo: (() => {
@@ -247,7 +247,7 @@ async function getView(view, ctx, q = new URLSearchParams()) {
     return { on: cfg.autoSurfOn, day: st.day, slots: cfg.autoSurfOn ? st.slots : [], done: st.done, runs: st.runs.slice(0, 15), gate: gateKind(cfg) !== 'builtin' };
   }
   if (view === 'config') return { config: cfg, defaults: DEFAULTS, fields: FIELDS, configFile: CONFIG_FILE, askPresets: ASK_PRESETS };
-  if (view === 'emotes') return emoteView(cfg);
+  if (view === 'emotes') { ctx.refreshTools?.(); return emoteView(cfg); }
   // 「谁叫的」靠门卫认人：现在的门卫能不能给消息记录（recentMessages，协议 v2）
   if (view === 'askGate') {
     const hi = await hello(cfg);
@@ -327,17 +327,21 @@ const CACHE_DIRS = {
 async function postAction(body, ctx) {
   const cfg = loadConfig();
   switch (body.action) {
-    case 'saveConfig': return { config: saveConfig(body.config ?? {}) };
+    // 表情设置改了：评论、私信、动态三个工具马上换成新说明（index.js 的 refreshTools）
+    case 'saveConfig': { const config = saveConfig(body.config ?? {}); ctx.refreshTools?.(); return { config }; }
     case 'resetConfig': {
       const group = body.group;
       const keys = FIELDS.filter((f) => f.group === group).map((f) => f.key);
       if (!keys.length) throw new Error('不认识的分组');
-      return { config: saveConfig(Object.fromEntries(keys.map((k) => [k, DEFAULTS[k]]))) };
+      const config = saveConfig(Object.fromEntries(keys.map((k) => [k, DEFAULTS[k]])));
+      ctx.refreshTools?.();
+      return { config };
     }
     // 表情：刷新账号的表情面板、去掉「新」标记
     case 'emoteRefresh': {
       const client = await writeClient(cfg);
       try { await refreshEmotes(client); } catch (e) { throw new Error(`没拉到表情面板：${e?.message ?? e}`); }
+      ctx.refreshTools?.();
       return emoteView(loadConfig());
     }
     case 'emoteSeen': clearFresh(); return emoteView(cfg);
@@ -352,6 +356,7 @@ async function postAction(body, ctx) {
         else if (body.action === 'stickerRemove') removeSticker(body.id);
         else resumeStickers();
       } catch (e) { if (e instanceof StickerError) throw new Error(e.message); throw e; }
+      ctx.refreshTools?.();
       return emoteView(cfg);
     case 'checkPath': return checkWritableDir(String(body.path ?? '').trim());
     case 'checkTool': return toolVersion(body.kind === 'ytdlp' ? 'ytdlp' : 'ffmpeg', String(body.path ?? '').trim());

@@ -260,3 +260,42 @@ test('设置页接口：上传表情包要走 ?upload=sticker；表情包图能�
   const ov = JSON.parse((await call('GET', '/api/bili-eyes?view=emotes')).body);
   assert.equal(ov.stale, true, '加了表情包就要提醒重启');
 });
+
+test('设置改了不用重启：评论、私信、动态马上重新注册，说明和参数跟着变', async () => {
+  const stub = path.join(tmp, 'define-tool.mjs');
+  fs.writeFileSync(stub, 'export const defineTool = (d) => d;');
+  process.env.DSH_TOOLS_PATH = stub;
+  const { apply } = await import('../src/index.js');
+  const { saveConfig } = await import('../src/config.js');
+  saveConfig({ stickerOn: false });
+  const tools = new Map(); let disposed = 0; let handler = null;
+  const ctx = {
+    tools: { register: (d) => { assert.equal(tools.has(d.name), false, `${d.name} 没先注销就又注册了`); tools.set(d.name, d); return () => { disposed += 1; tools.delete(d.name); }; } },
+    inject: (deps, fn) => { if (deps[0] === 'webServer') fn({ webServer: { register: (r) => { handler = r.handler; return () => {} } } }); },
+  };
+  const dispose = await apply(ctx);
+  try {
+    assert.equal(tools.size, 14);
+    assert.equal('sticker' in tools.get('bili_comment').parameters, false);
+    for (let i = 0; i < 50 && !handler; i += 1) await new Promise((r) => setTimeout(r, 20));
+    const { Readable } = await import('node:stream');
+    const post = (body) => new Promise((resolve) => {
+      const req = Readable.from([Buffer.from(JSON.stringify(body))]);
+      Object.assign(req, { method: 'POST', url: '/api/bili-eyes', headers: { host: 'localhost' } });
+      handler(req, { writeHead(s) { this.s = s; }, end(b) { resolve({ status: this.s, body: JSON.parse(b) }); } });
+    });
+    const r = await post({ action: 'saveConfig', config: { stickerOn: true } });
+    assert.equal(r.status, 200);
+    assert.equal(disposed, 3, '只重新注册评论、私信、动态');
+    const comment = tools.get('bili_comment');
+    assert.ok(comment.parameters.sticker, '打开表情包后马上有 sticker 参数');
+    assert.match(comment.description, /比心/);
+    assert.equal(tools.size, 14);
+    assert.equal(E.emoteStale((await import('../src/config.js')).loadConfig(), S.loadStickers().list), false);
+    await post({ action: 'saveConfig', config: { writeGapSeconds: 61 } });
+    assert.equal(disposed, 3, '别的设置不触发重新注册');
+  } finally {
+    dispose();
+    saveConfig({ stickerOn: false, writeGapSeconds: DEFAULTS.writeGapSeconds });
+  }
+});

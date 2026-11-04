@@ -196,12 +196,14 @@ function kaomojiOn(cfg, cache, t) {
   return cache.packages.some((p) => on.has(p.id) && p.kind === 'text' && p.emotes.some((e) => e.text === t));
 }
 
-// ── 改了要重启 ────────────────────────────────────────────────────────────
-// 工具说明在插件加载时生成；记下那时的表情设置，之后不一样就提醒重启
-const SIG_KEYS = ['emoteMode', 'emoteMax', 'emotePkgs', 'emotePicks', 'stickerOn'];
+// ── 说明跟着设置走 ────────────────────────────────────────────────────────
+// 工具说明是注册工具时生成的。记下那时的表情设置（含表情面板），之后不一样了，
+// index.js 就把评论、私信、动态三个工具重新注册一遍（她下一次请求模型时就看到新的）；
+// 重新注册失败时 emoteStale 一直为真，设置页提醒重启。
+const SIG_KEYS = ['emoteMode', 'emoteMax', 'emotePkgs', 'emotePicks', 'stickerOn', 'stickerPerDay'];
 let loadedSig = null;
-export function emoteSig(cfg, stickers = []) {
-  const s = JSON.stringify([SIG_KEYS.map((k) => cfg[k]), stickers.map((x) => [x.name, x.when])]);
+export function emoteSig(cfg, stickers = [], cacheAt = loadEmotes().at) {
+  const s = JSON.stringify([SIG_KEYS.map((k) => cfg[k]), stickers.map((x) => [x.name, x.when]), cacheAt]);
   return crypto.createHash('sha1').update(s).digest('hex').slice(0, 12);
 }
 export function markLoaded(cfg, stickers = []) { loadedSig = emoteSig(cfg, stickers); }

@@ -16,7 +16,7 @@ import { bindHost, gateKind } from './gate.js';
 import { loadInbox } from './inbox.js';
 import { pollAutoSurf } from './auto-surf.js';
 import { pollGuard } from './guard.js';
-import { emoteGuide, markLoaded } from './emote.js';
+import { emoteGuide, markLoaded, emoteStale } from './emote.js';
 import { stickerGuide, loadStickers } from './sticker.js';
 
 export const name = 'dsh-bili-eyes';
@@ -238,13 +238,16 @@ export async function apply(ctx) {
   // 门卫要用宿主的会话表、审批服务，以及桥接插件提供的 biliEyesGate 服务
   const unbindHost = bindHost(ctx);
   const askNow = () => makeAsk(llm, null, loadConfig(), ctx);
-  mountApi(ctx, { registered: () => registered, registerError: () => registerError, ask: askNow, log: (m) => log(m) });
+  // 评论、私信、动态的说明里带着表情和表情包：设置改了就重新注册这三个工具（见 refreshTools）
+  let refreshTools = () => false;
+  mountApi(ctx, { registered: () => registered, registerError: () => registerError, ask: askNow, log: (m) => log(m), refreshTools: () => refreshTools() });
   const disposers = [];
+  const live = {};   // 会重新注册的工具：key → 注销函数
   try {
     const defineTool = await loadDefineTool();
     const cfg0 = loadConfig(); const stickers0 = loadStickers().list;
     const specs = toolSpecs(cfg0, stickers0);
-    markLoaded(cfg0, stickers0);   // 设置页按它提醒「改了表情要重启」
+    markLoaded(cfg0, stickers0);   // 之后设置不一样了就重新注册（emoteStale）
     const attach = async (pngs, prefix) => {
       const out = [];
       for (let i = 0; i < pngs.length; i += 1) {
@@ -290,9 +293,26 @@ export async function apply(ctx) {
     // 写操作不并发：额度、间隔、草稿编号都要按顺序算
     reg(specs.like, act(likeTool, '点赞'), false);
     reg(specs.fav, act(favTool, '收藏'), false);
-    reg(specs.comment, act(commentTool, '评论'), false);
-    reg(specs.dm, act(dmTool, '发私信'), false);
-    reg(specs.post, act(postTool, '发动态'), false);
+    // 评论、私信、动态：说明里有表情列表和表情包，设置改了要换成新的说明。
+    // 宿主每次请求模型时都重新组装工具列表，所以注销再注册后，她下一次请求就看到新的说明和参数，不用重启 DSH。
+    const LIVE = { comment: [commentTool, '评论'], dm: [dmTool, '发私信'], post: [postTool, '发动态'] };
+    const regLive = (sp) => {
+      for (const [key, [fn, verb]] of Object.entries(LIVE)) {
+        try { live[key]?.(); } catch { /* 已经注销了 */ }
+        live[key] = ctx.tools.register(defineTool({ ...sp[key], execute: act(fn, verb), isConcurrencySafe: () => false }));
+      }
+    };
+    regLive(specs);
+    refreshTools = () => {
+      try {
+        const cfg = loadConfig(); const stickers = loadStickers().list;
+        if (!emoteStale(cfg, stickers)) return false;
+        regLive(toolSpecs(cfg, stickers));
+        markLoaded(cfg, stickers);
+        log('表情设置改了：评论、私信、动态的说明已更新');
+        return true;
+      } catch (e) { log(`更新评论工具的说明失败：${e?.message ?? e}`); return false; }
+    };
     reg(specs.follow, act(followTool, '关注'), false);
     reg(specs.confirm, act(confirmTool, '处理草稿'), false);
     registered = true;
@@ -302,7 +322,8 @@ export async function apply(ctx) {
     if (process.env.DSH_BILI_EYES_DEBUG) throw e;
   }
   // 收件箱：每 10 秒看一眼要不要查（开关、间隔、安静时段在 pollInbox 里判断；真正的请求按 inboxPollSeconds）
-  const timer = setInterval(() => { pollInbox({ log, getAsk: askNow }).catch(() => {}); }, 10_000);
+  // 顺带看一眼表情设置有没有被改过（直接改配置文件、后台刷新了表情面板），改了就更新评论工具的说明
+  const timer = setInterval(() => { refreshTools(); pollInbox({ log, getAsk: askNow }).catch(() => {}); }, 10_000);
   timer.unref?.();
   // 守评论区：每 30 秒看一眼（开关、间隔在 pollGuard 里判断）
   const guardTimer = setInterval(() => { pollGuard({ getAsk: askNow, log }).catch((e) => log(`守评论区出错：${e?.message ?? e}`)); }, 30_000);
@@ -315,6 +336,6 @@ export async function apply(ctx) {
     clearInterval(guardTimer);
     clearInterval(autoTimer);
     unbindHost();
-    for (const d of disposers) { try { d?.(); } catch { /* 忽略 */ } }
+    for (const d of [...disposers, ...Object.values(live)]) { try { d?.(); } catch { /* 忽略 */ } }
   };
 }
