@@ -39,6 +39,8 @@
   "files": [
     "src",
     "bin",
+    "docs/README.md",
+    "docs/guide",
     "docs/门卫协议.md",
     "docs/冲浪与互动-设计.md",
     "locale",
