@@ -171,7 +171,7 @@ export async function recentMessages(cfg, who, since, opts = {}) {
 }
 
 /**
- * 转达给主人。kind：inbox 收件箱新消息（默认）/ recommend 她自己逛到、想推荐给主人的视频。
+ * 转达给主人。kind：inbox 收件箱新消息（默认）/ recommend 她自己逛到、想推荐给主人的视频 / comments 评论区处理结果 / drafts 自己逛时「先问主人」起的草稿。
  * 成功返回 true；内置门卫没处转达，返回 false。
  */
 export async function notify(cfg, text, items, opts = {}) {

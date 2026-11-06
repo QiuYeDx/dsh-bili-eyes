@@ -9,7 +9,7 @@ import { watchedUp } from './seen-ups.js';
 import { parseInput } from './url.js';
 import { nativeApprover } from './gate.js';
 import { ensureDevice } from './device.js';
-import { loadInbox, saveInbox, checkInbox, deliver, inQuiet, formatInbox, markItems, byWake } from './inbox.js';
+import { loadInbox, saveInbox, checkInbox, deliver, inQuiet, formatInbox, markItems, byEngine } from './inbox.js';
 import { loadEngine, saveEngine, processBatch, reportLines, sendReport, engineLock } from './engine.js';
 import { tidyEmotes, droppedNote, hasWords, refreshIfStale } from './emote.js';
 import { pickSticker } from './sticker.js';
@@ -238,7 +238,7 @@ export function engineItem(x) {
 
 /** 把还没处理的回复 / @ 交给评论引擎，结果写回收件箱条目。返回处理了几条。 */
 async function handleWithEngine(st, cfg, { getAsk, now, selfMid, log, deps = {} }) {
-  const items = st.items.filter((x) => x.status === 'new' && !byWake(x, cfg)).slice(0, 12);
+  const items = st.items.filter((x) => x.status === 'new' && byEngine(x, cfg)).slice(0, 12);
   if (!items.length) return 0;
   return engineLock(async () => {
     const est = loadEngine();
@@ -296,7 +296,7 @@ export async function pollInbox({ force = false, cfg = loadConfig(), now = Date.
     let delivered = 0; let handled = 0;
     if (!hold) {
       delivered = await deliver(st, cfg, { now });
-      if (cfg.inboxReplyMode !== 'wake') handled = await handleWithEngine(st, cfg, { getAsk, now, selfMid: Number(cred.cookies.DedeUserID) || 0, log, deps });
+      if (cfg.inboxReplyMode === 'notify' || cfg.inboxReplyMode === 'engine') handled = await handleWithEngine(st, cfg, { getAsk, now, selfMid: Number(cred.cookies.DedeUserID) || 0, log, deps });
     }
     st.lastError = '';
     saveInbox(st);

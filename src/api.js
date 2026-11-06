@@ -7,7 +7,7 @@ import path from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import QRCode from 'qrcode';
 import { BiliClient } from './bili-api.js';
-import { loadConfig, saveConfig, DEFAULTS, FIELDS, CONFIG_FILE, DATA_DIR, DSH_HOME, PERM_ROWS, AUDIENCES, MODE_TEXT, permFor, ASK_PRESETS } from './config.js';
+import { loadConfig, saveConfig, invalidFields, DEFAULTS, FIELDS, CONFIG_FILE, DATA_DIR, DSH_HOME, PERM_ROWS, AUDIENCES, MODE_TEXT, permFor, ASK_PRESETS } from './config.js';
 import { loadCredential, saveCredential, removeCredential, qrGenerate, qrPoll } from './credential.js';
 import { readHistory, clearHistory } from './history.js';
 import { look, lookZoom, find, usage, resetLoginCache, makeClient, InputError } from './look.js';
@@ -246,7 +246,8 @@ async function getView(view, ctx, q = new URLSearchParams()) {
     const st = cfg.autoSurfOn ? ensurePlan(loadAuto(), cfg, Date.now()) : loadAuto();
     return { on: cfg.autoSurfOn, day: st.day, slots: cfg.autoSurfOn ? st.slots : [], done: st.done, runs: st.runs.slice(0, 15), gate: gateKind(cfg) !== 'builtin' };
   }
-  if (view === 'config') return { config: cfg, defaults: DEFAULTS, fields: FIELDS, configFile: CONFIG_FILE, askPresets: ASK_PRESETS };
+  // invalid：文件里现有的值超出范围的（手改过配置文件、或旧版本允许的值）；不挡保存，只在设置页提示
+  if (view === 'config') return { config: cfg, defaults: DEFAULTS, fields: FIELDS, configFile: CONFIG_FILE, askPresets: ASK_PRESETS, invalid: invalidFields(cfg) };
   if (view === 'emotes') { ctx.refreshTools?.(); return emoteView(cfg); }
   // 「谁叫的」靠门卫认人：现在的门卫能不能给消息记录（recentMessages，协议 v2）
   if (view === 'askGate') {
@@ -328,14 +329,14 @@ async function postAction(body, ctx) {
   const cfg = loadConfig();
   switch (body.action) {
     // 表情设置改了：评论、私信、动态三个工具马上换成新说明（index.js 的 refreshTools）
-    case 'saveConfig': { const config = saveConfig(body.config ?? {}); ctx.refreshTools?.(); return { config }; }
+    case 'saveConfig': { const config = saveConfig(body.config ?? {}); ctx.refreshTools?.(); return { config, invalid: invalidFields(config) }; }
     case 'resetConfig': {
       const group = body.group;
       const keys = FIELDS.filter((f) => f.group === group).map((f) => f.key);
       if (!keys.length) throw new Error('不认识的分组');
       const config = saveConfig(Object.fromEntries(keys.map((k) => [k, DEFAULTS[k]])));
       ctx.refreshTools?.();
-      return { config };
+      return { config, invalid: invalidFields(config) };
     }
     // 表情：刷新账号的表情面板、去掉「新」标记
     case 'emoteRefresh': {

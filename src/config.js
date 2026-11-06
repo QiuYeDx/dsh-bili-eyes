@@ -67,6 +67,9 @@ export const DEFAULTS = Object.freeze({
   autoSurfMax: 2,          // 最多几次（每天在两者之间随机）
   autoSurfGapMinutes: 60,  // 两次之间至少隔多久
   autoSurfComment: true,   // 看情况自己评论（还要「评论」档位开着）
+  autoSurfLike: true,      // 看情况点赞（还要权限表「点赞、收藏」能在后台做：先问主人或直接做）
+  autoSurfFav: true,       // 看情况收藏（同上，每圈最多 1 个）
+  autoSurfPost: false,     // 特别喜欢的偶尔发条动态分享（还要「发动态」档位开着；每天最多 1 条）
   autoSurfRecommend: 'notify', // 想推荐给主人时怎么说：notify 门卫转达 / comment 评论里 @ 主人 / dm B站私信，可多选（逗号分隔）
   autoSurfVoice: '',       // 她说话的样子（自己写评论和推荐语时用）
   // 收件箱
@@ -76,8 +79,8 @@ export const DEFAULTS = Object.freeze({
   inboxQuiet: '00:30-07:30', // 安静时段（空 = 没有）
   inboxQuietMode: 'hold',  // 安静时段里：hold 照查但先攒着、时段结束再处理 / skip 不查 / normal 照常
   inboxDm: true,           // 也查私信
-  inboxNotifyPerHour: 6,   // 每小时最多转达几次
-  inboxReplyMode: 'wake',  // 别人回复 / @ 她的评论：wake 叫醒她自己处理（老办法）/ notify 只告诉主人 / engine 插件按权限表回
+  inboxNotifyPerHour: 6,   // 每小时最多转达几次（0 = 一律不转达）
+  inboxReplyMode: 'wake',  // 别人回复 / @ 她的评论：wake 叫醒她自己处理（老办法）/ notify 只告诉主人 / engine 插件按权限表回 / log 只记下来
   inboxChatChance: 80,     // 别人接她的话（闲聊）时回的概率（%）
   inboxReport: 'auto',     // 回完要不要告诉主人：all 都说 / auto 只说直接回了的 / none 不说
   // 守评论区（guard.js）：盯着主人投稿的评论区，有新评论就判断、回复或转告主人
@@ -320,6 +323,9 @@ export const FIELDS = Object.freeze([
   { key: 'autoSurfMax', group: 'autosurf', type: 'int', min: 1, max: 12, unit: '次', label: '每天最多逛几次', hint: '每天在「至少」和「最多」之间随机' },
   { key: 'autoSurfGapMinutes', group: 'autosurf', type: 'int', min: 10, max: 720, unit: '分钟', label: '两次之间至少隔' },
   { key: 'autoSurfComment', group: 'autosurf', type: 'bool', label: '看情况自己评论', hint: '每次最多一条；还要「互动」里的「评论」档位开着，额度照算' },
+  { key: 'autoSurfLike', group: 'autosurf', type: 'bool', label: '看情况点赞', hint: '逛到真喜欢的顺手点个赞；还要「互动 → 设置」权限表里「点赞、收藏」是「先问主人」或「直接做」，额度照算' },
+  { key: 'autoSurfFav', group: 'autosurf', type: 'bool', label: '看情况收藏', hint: '值得以后再看、或想留给主人看的收藏起来，每圈最多 1 个；权限看「点赞、收藏」那一行' },
+  { key: 'autoSurfPost', group: 'autosurf', type: 'bool', label: '特别喜欢的偶尔发条动态', hint: '默认关。发动态是公开的；每天最多 1 条，还要权限表「发动态」开着、每日额度没用完' },
   { key: 'autoSurfRecommend', group: 'autosurf', type: 'multi', options: [['notify', '门卫转达（比如 QQ 私聊）'], ['comment', 'B站评论里 @ 主人'], ['dm', 'B站私信主人']], label: '想推荐给主人时', hint: '可多选；都不选 = 不推荐。评论 @ 和私信要设置主人 UID、开着对应档位；门卫转达要接了门卫（没接就跳过）' },
   { key: 'autoSurfVoice', group: 'autosurf', type: 'text', max: 300, multiline: true, label: '她说话的样子', hint: '自己写评论、推荐语，以及守评论区、收件箱里回复别人时，都照着这个口吻。比如「叫小鲸鱼，说话短、爱用颜文字、有点傲娇」' },
   { key: 'inboxOn', group: 'inbox', type: 'bool', label: '后台查收件箱', hint: '回复我的、@ 我的、私信' },
@@ -328,10 +334,10 @@ export const FIELDS = Object.freeze([
   { key: 'inboxIntervalSeconds', group: 'inbox', type: 'int', min: 60, max: 3600, unit: '秒', label: '未读数没变时也完整查一次', hint: '兜底：万一未读数没反映出来，最晚隔这么久也会查到' },
   { key: 'inboxQuiet', group: 'inbox', type: 'text', max: 11, pattern: /^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$/, patternHint: '写成 00:30-07:30', label: '安静时段', hint: '比如 00:30-07:30（可跨午夜）；留空 = 没有安静时段' },
   { key: 'inboxQuietMode', group: 'inbox', type: 'enum', options: [['hold', '照查，但先攒着，时段结束再处理'], ['skip', '不查'], ['normal', '照常（照样回复、转达）']], label: '安静时段里', hint: '守评论区也按这个来' },
-  { key: 'inboxReplyMode', group: 'inbox', type: 'enum', options: [['wake', '叫醒她自己处理（交给门卫转达）'], ['notify', '只告诉主人'], ['engine', '插件按权限表回']], label: '别人回复 / @ 她的评论', hint: '后两种交给评论引擎：插件自己判断要不要回、怎么回（规矩在「互动 → 设置 → 怎么回」），不用等她被叫醒。回不回、要不要先问，看「互动 → 设置」权限表的「回复」那一行：在自己人的投稿下算「主人评论区里的别人」，别处算「外面的人」。主人的回复、@ 和私信照旧叫醒她' },
+  { key: 'inboxReplyMode', group: 'inbox', type: 'enum', options: [['wake', '叫醒她自己处理（交给门卫转达）'], ['notify', '只告诉主人'], ['engine', '插件按权限表回'], ['log', '只记下来（不叫醒她，也不告诉主人）']], label: '别人回复 / @ 她的评论', hint: '「只记下来」：消息照样进收件箱，她用 bili_inbox 看得到，但不叫醒她、不转达，适合只管主人视频、不理别人的。「只告诉主人」和「插件按权限表回」交给评论引擎：插件自己判断要不要回、怎么回（规矩在「互动 → 设置 → 怎么回」），不用等她被叫醒。回不回、要不要先问，看「互动 → 设置」权限表的「回复」那一行：在自己人的投稿下算「主人评论区里的别人」，别处算「外面的人」。主人的回复、@ 和私信照旧叫醒她' },
   { key: 'inboxChatChance', group: 'inbox', type: 'int', min: 0, max: 100, unit: '%', label: '别人接她的话时回的概率', hint: '闲聊、夸奖这类；问题和要主人处理的不受它影响' },
-  { key: 'inboxReport', group: 'inbox', type: 'enum', options: [['auto', '只说直接回了的'], ['all', '都说（含起草、跳过）'], ['none', '不说']], label: '处理完要不要告诉主人', hint: '经门卫转达（比如 QQ 私聊）；要主人处理的那些总会说' },
-  { key: 'inboxNotifyPerHour', group: 'inbox', type: 'int', min: 1, max: 60, unit: '次', label: '每小时最多转达几次' },
+  { key: 'inboxReport', group: 'inbox', type: 'enum', options: [['auto', '只说直接回了的'], ['all', '都说（含起草、跳过）'], ['none', '不说']], label: '处理完要不要告诉主人', hint: '只在上面选「只告诉主人」或「插件按权限表回」时有用：插件处理完别人的评论后，经门卫转达（比如 QQ 私聊）说一声；要主人处理的那些总会说。选「叫醒她」时收到就会转达，不看这一项' },
+  { key: 'inboxNotifyPerHour', group: 'inbox', type: 'int', min: 0, max: 60, unit: '次', label: '每小时最多转达几次', hint: '收件箱和守评论区共用。0 = 一律不转达：连主人自己在 B站回复、@、私信她，和要主人处理的转告也不会说（消息都留在收件箱里）。只是不想被别人的消息打扰，用上面的「只记下来」' },
   { key: 'guardMode', group: 'guard', type: 'enum', options: [['off', '关'], ['notify', '只告诉主人'], ['on', '按权限表回']], label: '守评论区', hint: '盯着主人投稿的评论区：能答的答、闲聊的偶尔接一句、要主人处理的转告主人、不值得回的跳过。回不回、要不要先问，看权限表里「回复 · 主人评论区里的别人」那一格。要先设置主人 UID' },
   { key: 'guardAutoNew', group: 'guard', type: 'bool', label: '新投稿自动加入' },
   { key: 'guardDays', group: 'guard', type: 'int', min: 0, max: 3650, unit: '天', label: '只盯最近多少天的投稿', hint: '0 = 不限（主人最近的几十条投稿都算）；手动加的不受它限制' },
@@ -383,9 +389,11 @@ export const FIELDS = Object.freeze([
 ]);
 
 /** 校验一份完整配置，返回错误列表（空 = 合法）。 */
-export function validateConfig(c) {
+export function validateConfig(c, keys = null) {
   const errors = [];
+  const only = keys ? new Set(keys) : null;
   for (const f of FIELDS) {
+    if (only && !only.has(f.key)) continue;
     const v = c[f.key];
     const show = (n) => (f.scale ? n / f.scale : n);
     if (f.type === 'int') {
@@ -409,9 +417,19 @@ export function validateConfig(c) {
   return errors;
 }
 
-/** 合并一份局部修改并保存（文件里只留和默认值不同的项）；不合法就抛错，文件不动。 */
+/** 每个不合法的项单独列出来 [{key, error}]（设置页标在对应的组里）。 */
+export function invalidFields(c) {
+  return FIELDS.flatMap((f) => validateConfig(c, [f.key]).map((error) => ({ key: f.key, error })));
+}
+
+/**
+ * 合并一份局部修改并保存（文件里只留和默认值不同的项）；这次改了的项不合法就抛错，文件不动。
+ * 只校验真的改了的项：文件里已有的旧值哪怕超出范围（比如手改过、或旧版本允许的值），也不挡住别的设置——
+ * 设置页按组保存，一组里没动的项也会一起发过来，所以按「值变了没有」而不是「在不在补丁里」判断。
+ */
 export function saveConfig(patch, file = CONFIG_FILE) {
-  const next = { ...loadConfig(file) };
+  const before = loadConfig(file);
+  const next = { ...before };
   for (const [k, v] of Object.entries(patch ?? {})) {
     if (!(k in DEFAULTS)) continue;
     const type = FIELDS.find((f) => f.key === k)?.type;
@@ -419,7 +437,8 @@ export function saveConfig(patch, file = CONFIG_FILE) {
     else if (typeof DEFAULTS[k] === 'string') next[k] = String(v ?? '').trim();
     else next[k] = v;
   }
-  const errors = validateConfig(next);
+  const changed = Object.keys(DEFAULTS).filter((k) => next[k] !== before[k]);
+  const errors = validateConfig(next, changed);
   if (errors.length) { const err = new Error(errors.join('；')); err.errors = errors; throw err; }
   const out = {};
   for (const k of Object.keys(DEFAULTS)) if (next[k] !== DEFAULTS[k]) out[k] = next[k];

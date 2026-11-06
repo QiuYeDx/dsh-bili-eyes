@@ -142,9 +142,12 @@ export function notifyText(items, now = Date.now()) {
 /**
  * 这条要不要用老办法（叫醒她自己处理）：私信总是；主人的回复和 @ 也总是（主人是在找她，
  * 要她看了视频自己回，评论引擎会把主人的评论当成「不用回」跳过）；别人的评论只在「叫醒她自己处理」档位下。
+ * 「只记下来」档位（log）：别人的评论既不叫醒、也不交给评论引擎，留在收件箱里等她用 bili_inbox 看（见 byEngine）。
  */
 export const isOwnerItem = (x, cfg) => Boolean(x.owner) || (cfg.ownerMid > 0 && Number(x.user?.mid) === Number(cfg.ownerMid));
 export const byWake = (x, cfg) => x.kind === 'dm' || isOwnerItem(x, cfg) || cfg.inboxReplyMode === 'wake' || !x.target || x.target.oid === '0';
+/** 交给评论引擎的：不叫醒她的那些，而且档位是「只告诉主人」或「插件按权限表回」（「只记下来」不交）。 */
+export const byEngine = (x, cfg) => !byWake(x, cfg) && (cfg.inboxReplyMode === 'notify' || cfg.inboxReplyMode === 'engine');
 
 /** 把还没转达的交给门卫；按每小时上限节流。返回转达了几条。 */
 export async function deliver(state, cfg, { now = Date.now(), notifyImpl = notify } = {}) {

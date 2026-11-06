@@ -29,6 +29,29 @@ test('保存配置：校验、只写非默认值、路径统一成正斜杠', ()
   assert.equal('maxPerHour' in JSON.parse(fs.readFileSync(file, 'utf8')), false);
 });
 
+test('保存只校验改了的项：文件里已有的超范围旧值不挡别的设置，设置页会单独列出来', async () => {
+  const { invalidFields } = await import('../src/config.js');
+  const file = path.join(tmp, 'cfg-legacy.json');
+  fs.writeFileSync(file, JSON.stringify({ maxFindPerHour: 0 }));   // 手改过、超出范围
+  const bad = FIELDS.find((f) => f.key === 'maxFindPerHour');
+  assert.ok(bad.min > 0, '用一个下限大于 0 的项来测');
+  assert.equal(invalidFields(loadConfig(file)).map((x) => x.key).join(), 'maxFindPerHour');
+  const next = saveConfig({ maxPerHour: 40 }, file);
+  assert.equal(next.maxPerHour, 40);
+  assert.equal(next.maxFindPerHour, 0, '没动的旧值原样留着');
+  saveConfig({ maxFindPerHour: 0, danmaku: false }, file);   // 设置页按组保存，没变的项也会一起发过来
+  assert.equal(loadConfig(file).danmaku, false);
+  assert.throws(() => saveConfig({ maxFindPerHour: -1 }, file), new RegExp(bad.label), '真改成不合法的值照样拦');
+  assert.deepEqual(invalidFields({ ...DEFAULTS }), []);
+});
+
+test('每小时最多转达几次可以是 0（一律不转达）', () => {
+  const file = path.join(tmp, 'cfg-relay.json');
+  assert.equal(saveConfig({ inboxNotifyPerHour: 0, inboxReplyMode: 'log' }, file).inboxNotifyPerHour, 0);
+  assert.equal(loadConfig(file).inboxReplyMode, 'log');
+  assert.throws(() => saveConfig({ inboxNotifyPerHour: -1 }, file), /每小时最多转达几次/);
+});
+
 test('清空路径后撤掉自己设过的环境变量，不动外部的', () => {
   const env = { DSH_FFMPEG_PATH: 'C:/outside/ffmpeg.exe' };
   applyEnv({ ...DEFAULTS, cacheDir: 'E:/c' }, env);

@@ -242,6 +242,10 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
 .be-mdv{display:flex;align-items:baseline;gap:8px;font-weight:600;font-size:14px}
 .be-mdv span{font-weight:400;font-size:12px;color:var(--t3)}
 .be-ok{color:var(--ok);font-size:13px}.be-no{color:var(--bad);font-size:13px}
+.be-warn{font-size:13px;color:var(--bad);padding:8px 10px;border-radius:var(--rs);background:color-mix(in srgb,var(--bad) 7%,transparent);border:1px solid color-mix(in srgb,var(--bad) 25%,transparent)}
+.be-summary{font-size:13px;line-height:1.6;padding:10px 12px;border-radius:var(--rs);background:color-mix(in srgb,var(--brand) 6%,transparent);border:1px solid color-mix(in srgb,var(--brand) 20%,transparent)}
+.be-summary b{font-weight:600}
+.be-summary ul{margin:4px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:2px}
 .be-page{display:flex;flex-direction:column;gap:16px;min-width:0}
 .be-page[hidden]{display:none}
 .be-sub{display:inline-flex;gap:2px;padding:3px;border-radius:10px;background:color-mix(in srgb,var(--t1) 6%,transparent);min-width:0;max-width:100%;overflow-x:auto;scrollbar-width:none}
@@ -836,7 +840,15 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
       ['all-off', '全关', { own: 'off', home: 'off', out: 'off', all: 'off' }],
     ];
     const PERM_LEVELS = [['off', '关', '不做'], ['asked', '主人开口才做', '主人要、或点了审批卡片才做，不起草'], ['approve', '先问主人', '起草，等主人同意再发'], ['auto', '直接做', '额度内直接发']];
-    const PERM_ROW_NOTE = { follow: '取关最多先问；外面的只限看过的', post: '' };
+    // 每一行会被谁用到：设成「直接做」也要有人去做（聊天里她自己调工具，或后台的自己逛 / 收件箱 / 守评论区）
+    const PERM_ROW_NOTE = {
+      like: '聊天里她自己决定；自己逛开了「看情况点赞 / 收藏」',
+      comment: '聊天里；自己逛开了「看情况自己评论」',
+      reply: '聊天里；收件箱、守评论区交给插件回时',
+      follow: '只在聊天里；取关最多先问，外面的只限看过的',
+      dm: '聊天里；自己逛推荐选了「B站私信主人」',
+      post: '聊天里；自己逛开了「偶尔发条动态」',
+    };
     function PermTable({ fields, draft, saved, onChange }) {
       if (!fields.length) return h('div', { className: 'be-err' }, '插件已经更新，但 DSH 里跑的还是旧版本，权限表要重启 DSH 才能用。');
       const rows = [];
@@ -930,19 +942,21 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
       useEffect(() => { report?.(toc); return () => report?.(null); }, [report, toc && toc.map((x) => x.join(':')).join('|')]);
       const [draft, setDraft] = useState(null);
       const [saved, setSaved] = useState(null);
-      useEffect(() => { if (st.data) { setDraft(st.data.config); setSaved(st.data.config); } }, [st.data]);
+      const [invalid, setInvalid] = useState([]);   // 文件里现有的值超出范围的项：不挡保存，标在对应的组里
+      useEffect(() => { if (st.data) { setDraft(st.data.config); setSaved(st.data.config); setInvalid(st.data.invalid ?? []); } }, [st.data]);
       return h(Loading, { state: st }, (d) => {
         if (!draft || !saved) return null;
         const save = (group, label) => {
           const patch = {};
           for (const fld of d.fields.filter((x) => x.group === group)) patch[fld.key] = draft[fld.key];
-          api.post('saveConfig', { config: patch }).then((r) => { setDraft(r.config); setSaved(r.config); toast(savedText?.(group, label) ?? `${label}已保存，马上生效`); onSaved?.(r.config, group); }, (e) => toast(e.message, true));
+          api.post('saveConfig', { config: patch }).then((r) => { setDraft(r.config); setSaved(r.config); setInvalid(r.invalid ?? []); toast(savedText?.(group, label) ?? `${label}已保存，马上生效`); onSaved?.(r.config, group); }, (e) => toast(e.message, true));
         };
-        const reset = (group) => api.post('resetConfig', { group }).then((r) => { setDraft(r.config); setSaved(r.config); toast(savedText ? `已恢复默认。${savedText(group, '')}` : '已恢复默认'); onSaved?.(r.config, group); }, (e) => toast(e.message, true));
+        const reset = (group) => api.post('resetConfig', { group }).then((r) => { setDraft(r.config); setSaved(r.config); setInvalid(r.invalid ?? []); toast(savedText ? `已恢复默认。${savedText(group, '')}` : '已恢复默认'); onSaved?.(r.config, group); }, (e) => toast(e.message, true));
         return h(React.Fragment, null,
           groups.map(([group, label, desc]) => {
             const list = d.fields.filter((x) => x.group === group);
             const dirty = list.some((x) => draft[x.key] !== saved[x.key]);
+            const bad = invalid.filter((x) => list.some((f) => f.key === x.key) && draft[x.key] === saved[x.key]);
             return h(Card, { key: group, id: `be-g-${group}`, title: label, desc, aside: dirty ? '有未保存的修改' : '' },
               render[group] ? render[group]({ list, draft, saved, d, set: (patch) => setDraft({ ...draft, ...patch }) })
               : group === 'perm'
@@ -954,6 +968,7 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
                       ? h(GroupPresetsField, { key: fld.key, fld, value: draft[fld.key], presets: d.askPresets ?? [], onChange: (v) => setDraft({ ...draft, [fld.key]: v }) })
                       : h(FieldInput, { key: fld.key, fld, value: draft[fld.key], def: d.defaults[fld.key], onChange: (v) => setDraft({ ...draft, [fld.key]: v }) })))))
                   : h('div', { className: 'be-fields' }, list.map((fld) => h(FieldInput, { key: fld.key, fld, value: draft[fld.key], def: d.defaults[fld.key], onChange: (v) => setDraft({ ...draft, [fld.key]: v }) }))),
+              bad.length > 0 && h('div', { className: 'be-warn' }, `配置文件里有超出范围的值（可能是手改过）：${bad.map((x) => x.error).join('；')}。不影响保存别的设置；改到范围内再保存这一组就行。`),
               h('div', { className: 'be-row' },
                 h(Btn, { kind: 'primary', disabled: !dirty, onClick: () => save(group, label) }, '保存'),
                 h(Btn, { onClick: () => reset(group) }, '恢复默认'),
@@ -1185,6 +1200,7 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
 
     const RUN_CLS = { sent: 'ok', ok: 'ok', draft: 'brand', failed: 'bad', hidden: 'bad', 'no-owner': 'bad', 'no-gate': 'bad' };
     const RUN_STATUS = { sent: '已发', draft: '起草（等同意）', refused: '没发', failed: '失败', hidden: '仅自己可见', ok: '已转达', 'no-owner': '没设主人 UID', 'no-gate': '没接门卫' };
+    const acted = (r) => Boolean(r.comments.length || r.recommend || r.likes?.length || r.favs?.length || r.post);
     function AutoSurfPanel({ toast, active, go }) {
       const st = useView('autosurf');
       useRefreshOnShow(active, st.reload);
@@ -1193,20 +1209,24 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
         setRun({ since: Date.now() });
         api.post('autoSurfNow').then((r) => toast(r.run.ok ? `逛完了：挑了 ${r.run.picks.length} 条` : `没成功：${r.run.error}`, !r.run.ok), (e) => toast(e.message, true)).finally(() => { setRun(null); st.reload(); });
       };
-      return h(Card, { title: '自己逛', desc: '插件按时间表自己去逛，逛完看情况在视频下面评论，把最想推荐的告诉主人。评论、@、私信照样受「互动」里的档位和额度管。' },
+      return h(Card, { title: '自己逛', desc: '插件按时间表自己去逛，逛完看情况评论、点赞、收藏（开了的话偶尔发条动态），把最想推荐的告诉主人。这些照样受「互动」里的权限表和额度管；「先问主人」起的草稿会经门卫问主人一句。' },
         h(Loading, { state: st }, (d) => h(React.Fragment, null,
           d.on
             ? h('div', { className: 'be-row' }, h('span', null, '今天的计划：'), d.slots.length ? d.slots.map((t) => h('span', { key: t, className: `be-badge ${d.done.includes(t) ? 'ok' : ''}` }, `${new Date(t).toTimeString().slice(0, 5)}${d.done.includes(t) ? ' ✓' : ''}`)) : h('span', { className: 'be-faint' }, '今天的时间段已经过了，明天再逛'))
             : h('div', { className: 'be-row' }, h('span', { className: 'be-faint' }, '没开。'), h('button', { type: 'button', className: 'be-link', onClick: () => go('surf', 'settings') }, '去设置里打开')),
-          h('div', { className: 'be-row' }, h(Btn, { disabled: Boolean(run), onClick: now }, run ? '逛着呢…' : '现在逛一次'), run && h(Elapsed, { since: run.since }), h('span', { className: 'be-faint' }, '不占今天的次数；会真的评论 / 推荐')),
+          h('div', { className: 'be-row' }, h(Btn, { disabled: Boolean(run), onClick: now }, run ? '逛着呢…' : '现在逛一次'), run && h(Elapsed, { since: run.since }), h('span', { className: 'be-faint' }, '不占今天的次数；会真的评论、点赞、收藏、推荐')),
           h(ScrollList, { items: d.runs, empty: '还没自己逛过。' }, (r) => h(Entry, {
             key: r.at, kind: [r.reason === 'manual' ? '手动逛' : '到点逛', 'pink'],
             ctx: r.ok && h('span', { className: 'be-ctx' }, `挑了 ${r.picks.length} 条${r.steps ? ` · ${r.steps} 步` : ''}`),
-            status: r.ok ? (r.comments.length || r.recommend ? null : ['没出手', 'dim']) : ['失败', 'bad'], at: r.at, error: r.error,
+            status: r.ok ? (acted(r) ? null : ['没出手', 'dim']) : ['失败', 'bad'], at: r.at, error: r.error,
           },
           r.comments.map((c) => h(RunStep, { key: c.bvid, label: '评论', title: c.title, bvid: c.bvid, status: RUN_STATUS[c.status] ?? c.status, cls: RUN_CLS[c.status] }, c.text)),
+          (r.likes ?? []).map((c) => h(RunStep, { key: `l${c.bvid}`, label: '点赞', title: c.title, bvid: c.bvid, status: RUN_STATUS[c.status] ?? c.status, cls: RUN_CLS[c.status] }, c.status === 'sent' || c.status === 'draft' ? '' : c.result)),
+          (r.favs ?? []).map((c) => h(RunStep, { key: `f${c.bvid}`, label: '收藏', title: c.title, bvid: c.bvid, status: RUN_STATUS[c.status] ?? c.status, cls: RUN_CLS[c.status] }, c.status === 'sent' || c.status === 'draft' ? c.why : c.result)),
+          r.post && h(RunStep, { label: '动态', title: r.post.title, bvid: r.post.bvid, status: RUN_STATUS[r.post.status] ?? r.post.status, cls: RUN_CLS[r.post.status] }, r.post.text),
+          r.drafts && h('div', { className: 'be-faint' }, `「先问主人」的草稿 ${r.drafts.ids.map((id) => `#${id}`).join('、')}：${{ ok: '已经转达给主人', failed: '转达失败', 'no-gate': '没接门卫' }[r.drafts.notify] ?? r.drafts.notify}，也可以在「互动 → 待同意」里点。`),
           r.recommend && h(RunStep, { label: '推荐', title: r.recommend.title, bvid: r.recommend.bvid, status: Object.entries(r.recommend.ways).map(([k, v]) => `${{ notify: '门卫', comment: '评论 @', dm: '私信' }[k]} ${RUN_STATUS[v] ?? v}`).join(' · '), cls: wayCls(Object.values(r.recommend.ways)) }, r.recommend.why),
-          r.ok && !r.comments.length && !r.recommend && r.picks.length > 0 && h('div', { className: 'be-faint' }, `逛到：${r.picks.map((p) => `《${p.title}》`).join('、')}`))))));
+          r.ok && !acted(r) && r.picks.length > 0 && h('div', { className: 'be-faint' }, `逛到：${r.picks.map((p) => `《${p.title}》`).join('、')}`))))));
     }
     // 推荐有几种方式：全成了绿，有失败红，其余（比如没开的方式没发）灰
     const wayCls = (vs) => (vs.some((v) => RUN_CLS[v] === 'bad') ? 'bad' : vs.length && vs.every((v) => RUN_CLS[v] === 'ok') ? 'ok' : '');
@@ -1287,8 +1307,38 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
         e.why ? h('span', null, e.why) : null);
     }
 
+    // 收件箱现在会怎么做：按（还没保存的）草稿实时说一遍，免得几个选项互相牵扯看不明白
+    const INBOX_OTHERS = {
+      wake: '叫醒她自己处理，会经门卫告诉你',
+      notify: '插件看一眼，转告你',
+      engine: '插件按权限表回',
+      log: '只记下来，不叫醒她，也不告诉你',
+    };
+    const INBOX_REPORT = { auto: '回了的会告诉你', all: '处理完都会告诉你', none: '处理完不说（要你处理的照样说）' };
+    function inboxSummary(c) {
+      if (!c.inboxOn) return ['后台查收件箱关着：不查新消息，也不转达；她用 bili_inbox 也看不到新的。'];
+      const relay = c.inboxNotifyPerHour > 0;
+      const owner = relay ? '叫醒她，经门卫告诉你' : '只记下来（转达次数是 0）';
+      let others = INBOX_OTHERS[c.inboxReplyMode] ?? c.inboxReplyMode;
+      if (!relay && (c.inboxReplyMode === 'wake' || c.inboxReplyMode === 'notify')) others = '只记下来（选的是「' + (c.inboxReplyMode === 'wake' ? '叫醒她' : '只告诉主人') + '」，但转达次数是 0）';
+      else if (c.inboxReplyMode === 'engine') others += relay ? `，${INBOX_REPORT[c.inboxReport] ?? ''}` : '，处理完不说（转达次数是 0）';
+      else if (c.inboxReplyMode === 'notify') others += `，${INBOX_REPORT[c.inboxReport] ?? ''}`;
+      const lines = [
+        `主人的回复 / @ / 私信 → ${owner}`,
+        `别人回复 / @ 她 → ${others}`,
+        `别人的私信 → ${c.inboxDm ? '只记下来' : '不查'}`,
+        relay ? `每小时最多转达 ${c.inboxNotifyPerHour} 次（守评论区共用）` : '一律不转达：消息都留在收件箱里，她用 bili_inbox 看',
+      ];
+      if (c.inboxQuiet) lines.push(`${c.inboxQuiet} 安静时段：${{ hold: '照查，先攒着，结束再处理', skip: '不查', normal: '照常' }[c.inboxQuietMode] ?? ''}`);
+      if (c.gateMode === 'builtin' && relay) lines.push('门卫是内置的：没处转达，要转达的也先留在收件箱');
+      return lines;
+    }
+
     function InboxSettings({ toast }) {
       return h(ConfigGroups, {
+        render: { inbox: ({ list, draft, d, set }) => h(React.Fragment, null,
+          h('div', { className: 'be-summary', role: 'note' }, h('b', null, '现在会这样：'), h('ul', null, inboxSummary(draft).map((x) => h('li', { key: x }, x)))),
+          h('div', { className: 'be-fields' }, list.map((fld) => h(FieldInput, { key: fld.key, fld, value: draft[fld.key], def: d.defaults[fld.key], onChange: (v) => set({ [fld.key]: v }) })))) },
         groups: [['inbox', '收件箱', '多久看一次、安静时段怎么办、别人回复她的评论交给谁处理、每小时最多打扰几次。评论交给评论引擎时，怎么回的规矩在「互动 → 设置」的「怎么回」里。'], ['gate', '门卫', '告诉插件「这个会话是不是主人本人」「主人说过什么」，并把收件箱的新消息和推荐转达到 QQ。用 dsh-qq 桥接的，选「dsh-qq」填桥接目录就行；别的桥接按 docs/门卫协议.md 接；都没有时用内置门卫（按会话的 agentPreset 和工作目录判断，本机会话「先问主人」时弹 DSH 审批卡片）。']],
         toast,
         footer: true,

@@ -12,7 +12,7 @@ const { parseVerdicts, plan, fitLength, processBatch, reportLines, sendReport, l
 const { videoList, togglePatch, bvList } = await import('../src/guard.js');
 const { pollInbox, engineItem } = await import('../src/interact.js');
 const { saveCredential } = await import('../src/credential.js');
-const { loadInbox, saveInbox, feedItem, byWake } = await import('../src/inbox.js');
+const { loadInbox, saveInbox, feedItem, byWake, byEngine } = await import('../src/inbox.js');
 const { request: realRequest, readAudit } = await import('../src/act.js');
 
 // 用 0.6.0 的档位写法（commentMode…）也行：先迁移成权限表
@@ -269,4 +269,27 @@ test('主人的回复和 @ 不进评论引擎，叫醒她自己处理（引擎�
   assert.equal(byWake(own, cfg), true);
   assert.equal(byWake({ ...own, owner: false }, cfg), true, '没有 owner 标记也按 UID 认');
   assert.equal(byWake(feedItem('reply', replyIt(5), 42), { ...cfg, ownerMid: 77 }), false, '别人的评论照旧交给引擎');
+});
+
+test('「只记下来」：别人的回复 / @ 不叫醒、不进评论引擎、留在收件箱；主人的照旧叫醒', async () => {
+  const cfg = cfgOf({ inboxReplyMode: 'log', ownerMid: 500 });
+  const other = feedItem('reply', replyIt(6), 500);
+  const own = feedItem('at', replyIt(7, '@她 看看'), 500);
+  other.owner = false; other.user = { mid: 600, name: '路人' };
+  assert.equal(byWake(other, cfg), false);
+  assert.equal(byEngine(other, cfg), false, '不交给评论引擎');
+  assert.equal(byWake(own, cfg), true, '主人在找她，照旧叫醒');
+  assert.equal(byEngine(feedItem('reply', replyIt(8), 42), cfgOf({ inboxReplyMode: 'engine', ownerMid: 77 })), true);
+
+  const st = loadInbox(); st.items = []; st.baseline = { reply: 0, at: 0, dmSince: 0, dm: {} }; st.lastPoll = 0; st.lastCheck = 0; st.notifiedAt = []; saveInbox(st);
+  const c = inboxClient({ unread: { reply: 9, at: 0, dm: 0 }, replies: [replyIt(9)] });
+  const calls = [];
+  const deps = { client: c, writeClient: async () => { throw new Error('不该用到写客户端'); }, request: async (req) => { calls.push(req); return { status: 'sent', text: 'ok' }; } };
+  const day = new Date(NOW); day.setHours(9, 0, 0, 0);
+  const r = await pollInbox({ cfg: { ...cfg, inboxOn: true, inboxQuiet: '', gateUrl: 'http://127.0.0.1:1/gate' }, now: day.getTime(), getAsk: () => { throw new Error('不该问模型'); }, deps });
+  assert.equal(r.added, 1);
+  assert.equal(r.delivered, 0, '不转达');
+  assert.equal(r.handled, 0, '不交给引擎');
+  assert.equal(calls.length, 0);
+  assert.equal(loadInbox().items[0].status, 'new', '留在收件箱，她用 bili_inbox 看得到');
 });

@@ -246,6 +246,14 @@ test('收件箱：转达按每小时上限节流，门卫失败不标记', async
   assert.match(notifyText([st.items[1]]), /（视频：https:\/\/www\.bilibili\.com\/video\//, '带上视频链接，她不用按标题去搜');
 });
 
+test('收件箱：每小时转达次数设成 0 就一律不转达，消息留着', async () => {
+  const st = { items: [feedItem('reply', replyIt(1))], notifiedAt: [] };
+  let called = false;
+  assert.equal(await deliver(st, cfgOf({ gateUrl: 'http://127.0.0.1:1/gate', inboxNotifyPerHour: 0 }), { notifyImpl: async () => { called = true; return true; } }), 0);
+  assert.equal(called, false);
+  assert.equal(st.items[0].status, 'new');
+});
+
 test('安静时段：可跨午夜', () => {
   const at = (h, m) => new Date(2026, 0, 1, h, m);
   assert.equal(inQuiet('00:30-07:30', at(3, 0)), true);

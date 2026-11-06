@@ -52,7 +52,7 @@ test('模型决定：只认编号在范围内的', () => {
   assert.deepEqual(d.comments, [{ i: 2, text: '这个转场太顺了' }]);
   assert.equal(d.recommend.i, 1);
   assert.equal(parseDecision('{"comments":[],"recommend":null}', 3).recommend, null);
-  assert.deepEqual(parseDecision('看不懂', 3), { comments: [], recommend: null });
+  assert.deepEqual(parseDecision('看不懂', 3), { comments: [], recommend: null, likes: [], favs: [], post: null });
 });
 
 test('私信主人可以带 B站视频链接，别的链接和长数字还是不行', () => {
@@ -116,4 +116,58 @@ test('到点才跑，跑完记进状态', async () => {
   assert.deepEqual(st.done, [slot]);
   assert.equal(st.runs.length, 1);
   assert.equal(await pollAutoSurf({ cfg, ask: () => null, now: slot + 2, file }), null, '同一个时刻不跑第二次');
+});
+
+test('模型决定：点赞、收藏、动态也只认编号在范围内的；收藏最多 1 条', () => {
+  const d = parseDecision('{"comments":[],"recommend":null,"likes":[1,2,2,9],"favs":[{"i":2,"why":"以后再看"},{"i":1,"why":"x"}],"post":{"i":1,"text":"今天刷到一个讲得超清楚的科普"}}', 2);
+  assert.deepEqual(d.likes, [1, 2]);
+  assert.deepEqual(d.favs, [{ i: 2, why: '以后再看' }]);
+  assert.equal(d.post.i, 1);
+  assert.equal(parseDecision('{"post":{"i":5,"text":"x"}}', 2).post, null);
+});
+
+test('逛完：权限表能在后台做才问点赞 / 收藏 / 动态；做了的记下来，「先问主人」的草稿经门卫转达', async () => {
+  const off = { ...DEFAULTS, autoSurfComment: false, autoSurfRecommend: '', autoSurfLike: true, autoSurfFav: true, autoSurfPost: true };
+  const { decideParts } = await import('../src/auto-surf.js');
+  assert.deepEqual(decideParts(off), { comments: 0, recommend: false, likes: false, favs: false, post: false }, '权限表默认全关：不问');
+  assert.equal(decideParts({ ...off, permLikeOut: 'asked' }).likes, false, '「主人开口才做」后台做不了');
+
+  const f = fakes({ decision: { likes: [1, 2], favs: [{ i: 2, why: '留给主人看' }], post: { i: 1, text: '今天刷到的视频一讲得好清楚' } } });
+  let sys = '';
+  const ask = async (q) => { sys = q.system; return f.ask(); };
+  f.deps.request = async (req, o) => {
+    f.calls.request.push({ req, via: o.via });
+    return req.kind === 'fav' ? { status: 'draft', draft: { id: 7, preview: req.preview }, text: '起草了' } : { status: 'sent', text: 'ok' };
+  };
+  f.deps.readAudit = () => [];
+  const cfg = { ...off, permLikeOwn: 'auto', permLikeOut: 'approve', permPost: 'auto', gateUrl: 'http://127.0.0.1:1/g' };
+  const r = await autoSurfOnce({ cfg, ask, deps: f.deps });
+  assert.ok(r.ok, r.error);
+  assert.match(sys, /likes/); assert.match(sys, /favs/); assert.match(sys, /post/);
+  assert.doesNotMatch(sys, /comments：/, '没开评论就不问评论');
+  const kinds = f.calls.request.map((c) => c.req.kind);
+  assert.deepEqual(kinds, ['like', 'like', 'fav', 'post']);
+  assert.ok(f.calls.request.every((c) => c.via === 'background'));
+  assert.equal(f.calls.request[0].req.payload.aid, 11);
+  assert.equal(f.calls.request[3].req.target.auto, true, '动态记上是自己逛发的（每天一条靠它数）');
+  assert.deepEqual(r.likes.map((x) => x.status), ['sent', 'sent']);
+  assert.equal(r.favs[0].status, 'draft');
+  assert.equal(r.post.status, 'sent');
+  assert.deepEqual(r.drafts, { ids: [7], notify: 'ok' });
+  const n = f.calls.notify.find((x) => x.kind === 'drafts');
+  assert.match(n.text, /#7 收藏《视频二》/);
+});
+
+test('自己逛的动态每天最多一条；没接门卫时草稿只留在「待同意」', async () => {
+  const { postedToday } = await import('../src/auto-surf.js');
+  const now = Date.now();
+  assert.equal(postedToday([{ kind: 'post', status: 'ok', at: now - 1000, target: { auto: true } }], now), true);
+  assert.equal(postedToday([{ kind: 'post', status: 'ok', at: now - 1000, target: {} }], now), false, '聊天里她自己发的不算');
+  const f = fakes({ decision: { likes: [1], post: { i: 1, text: '今天又刷到好东西了' } } });
+  f.deps.readAudit = () => [{ kind: 'post', status: 'ok', at: now - 1000, target: { auto: true } }];
+  f.deps.request = async (req, o) => { f.calls.request.push({ req, via: o.via }); return { status: 'draft', draft: { id: 3, preview: req.preview }, text: '起草了' }; };
+  const r = await autoSurfOnce({ cfg: { ...DEFAULTS, autoSurfComment: false, autoSurfRecommend: '', autoSurfPost: true, permLikeOut: 'approve', permLikeOwn: 'approve', permPost: 'auto' }, ask: f.ask, deps: f.deps });
+  assert.deepEqual(f.calls.request.map((c) => c.req.kind), ['like'], '今天发过了，不再发动态');
+  assert.deepEqual(r.drafts, { ids: [3], notify: 'no-gate' });
+  assert.equal(f.calls.notify.length, 0);
 });
