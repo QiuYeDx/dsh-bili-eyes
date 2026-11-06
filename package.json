@@ -44,7 +44,7 @@
     "docs/门卫协议.md",
     "docs/冲浪与互动-设计.md",
     "locale",
-    "assets",
+    "assets/icon.svg",
     "cordis.patch.yml",
     "dsh.plugin.json",
     "README.md",

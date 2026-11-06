@@ -1,10 +1,6 @@
 <div align="center">
 
-<img src="assets/icon.svg" width="88" alt="B站伙伴">
-
-# B站伙伴 · dsh-bili-eyes
-
-让 DeepSeek Harness 里的 AI 真的「看」B站视频，并且能自己逛 B站。
+<img src="assets/banner.webp" width="100%" alt="B站伙伴 · dsh-bili-eyes：让 AI 真的看懂 B站视频，也能自己逛 B站">
 
 [![npm](https://img.shields.io/npm/v/dsh-bili-eyes)](https://www.npmjs.com/package/dsh-bili-eyes)
 [![license](https://img.shields.io/npm/l/dsh-bili-eyes)](LICENSE)
