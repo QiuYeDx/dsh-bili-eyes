@@ -4,7 +4,7 @@
 //   写：bili_like、bili_fav、bili_comment、bili_dm、bili_post、bili_follow、bili_confirm（默认全关，设置页逐项打开；规则在 act.js）
 // 工具结果 = 图片（附件）+ 文字素材。图片必须先经 ctx.attachments.saveImage() 提交才能放进结果。
 // 设置页界面在 src/client.js（DSH 设置侧边栏的「B站伙伴」），接口在 src/api.js。收件箱在后台定时查（interact.js）。
-import { look, lookZoom, find, InputError } from './look.js';
+import { look, lookZoom, find, InputError, wellFormed } from './look.js';
 import { feed, comments } from './feed.js';
 import { surf } from './surf.js';
 import { likeTool, favTool, commentTool, dmTool, postTool, followTool, confirmTool, inboxTool, pollInbox, makeAsk, sessionIdOf } from './interact.js';
@@ -12,6 +12,7 @@ import { guarded } from './origin.js';
 import { loadConfig } from './config.js';
 import { ActError } from './act.js';
 import { BiliError } from './bili-api.js';
+import { netError } from './net.js';
 import { bindHost, gateKind } from './gate.js';
 import { loadInbox } from './inbox.js';
 import { pollAutoSurf } from './auto-surf.js';
@@ -114,7 +115,7 @@ const OUTPUT = {
     },
   },
   render(_args, value) {
-    return [...value.images.map((attachment) => ({ type: 'image', attachment })), { type: 'text', text: value.text }];
+    return [...value.images.map((attachment) => ({ type: 'image', attachment })), { type: 'text', text: wellFormed(value.text) }];
   },
 };
 
@@ -256,9 +257,12 @@ export async function apply(ctx) {
       return out;
     };
     // 输入错误（不是 B站链接、额度满了）和 B站那边的拒绝（风控、限流）给模型一句人话，别的错误照常抛出
+    // 连不上（fetch failed）说清卡在哪一步：这是这台电脑的网络问题，她重试没用，要告诉主人
     const friendly = (e, verb) => {
       if (e instanceof InputError || e instanceof ActError) return { text: `没法${verb}：${e.message}`, images: [] };
       if (e instanceof BiliError) return { text: `B站那边没成功：${e.message}。过一会儿再试，别反复重试。`, images: [] };
+      const net = netError(e);
+      if (net) return { text: `没法${verb}：${net.message}\n这是运行插件的这台电脑的网络问题，不是 B站拒绝了；别反复重试，把上面这句原样告诉主人。`, images: [] };
       throw e;
     };
     // 内置门卫没处转达收件箱：在她用别的 B站工具时顺带提一句

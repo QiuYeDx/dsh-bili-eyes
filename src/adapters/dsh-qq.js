@@ -11,6 +11,7 @@
 //                  桥接不通时用 OneBot 直接私聊主人一句，至少消息不丢
 import fs from 'node:fs';
 import path from 'node:path';
+import { cut } from '../look.js';
 
 const INBOX = { name: 'B站收件箱', marker: '【新消息】', fallback: '【B站收件箱】', base: [
   'B站小号的收件箱有新消息（见下面【新消息】，由 B站插件填写）。先调用 bili_inbox 看看待处理的。',
@@ -91,7 +92,7 @@ export function toRecent(list, { ownerQQ, selfId, since = 0 }) {
     const replyTo = String(segs.find((x) => x.type === 'reply')?.data?.id ?? '');
     const atSelf = Boolean(selfId) && (segs.some((x) => x.type === 'at' && String(x.data?.qq) === selfId) || byId.get(replyTo)?.uid === selfId);
     if (!links.length && !/BV[0-9A-Za-z]{10}|\bav\d+/i.test(text) && !atSelf && !replyTo) continue;
-    out.push({ id, at, sender: { id: uid, name: String(m.sender?.card || m.sender?.nickname || uid), isOwner: Boolean(ownerQQ) && uid === ownerQQ }, text: text.slice(0, 300), links, replyTo, atSelf });
+    out.push({ id, at, sender: { id: uid, name: String(m.sender?.card || m.sender?.nickname || uid), isOwner: Boolean(ownerQQ) && uid === ownerQQ }, text: cut(text, 300), links, replyTo, atSelf });
   }
   return out;
 }
@@ -128,7 +129,7 @@ export function dshQqGate(cfg, { log = () => {}, fetchImpl = fetch } = {}) {
       log(`dsh-qq：建了停用的定时任务「${t.name}」，只用来叫醒她`);
     }
     const head = String(task.instruction || t.base).split(`\n${t.marker}`)[0].trimEnd();
-    await f(`${api}/tasks/${task.id}`, { method: 'PATCH', body: { instruction: `${head}\n${t.marker}\n${text}`.slice(0, 1000) }, headers: H });
+    await f(`${api}/tasks/${task.id}`, { method: 'PATCH', body: { instruction: cut(`${head}\n${t.marker}\n${text}`, 1000) }, headers: H });
     await f(`${api}/tasks/${task.id}/run`, { method: 'POST', body: {}, headers: H, timeoutMs: 15_000 });
   };
 

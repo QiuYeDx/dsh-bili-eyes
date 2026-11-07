@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR } from './config.js';
-import { fmtDur, fmtNum, clip, isAd } from './look.js';
+import { fmtDur, fmtNum, clip, isAd, wellFormed } from './look.js';
 
 export const TRAILS_FILE = path.join(DATA_DIR, 'surf-trails.json');
 const RESULT_CHARS = 1500;
@@ -150,7 +150,8 @@ const num = (u, ...keys) => { for (const k of keys) if (Number.isFinite(u?.[k]))
 /** 调一次模型，收齐所有块。错误以 finish(error) 的形式来，这里转成异常。 */
 async function streamOnce(llm, target, { system, messages, tools, maxTokens, effort, signal }) {
   const blocks = []; let finish = null; let usage = null;
-  const opts = { provider: target.provider, model: target.model, system, messages, maxTokens, temperature: 0.5, signal, ...(tools ? { tools } : {}), ...(effort ? { reasoningEffort: effort } : {}) };
+  const clean = messages.map((m) => ({ ...m, content: m.content.map((c) => (c.type === 'text' ? { ...c, text: wellFormed(c.text) } : c)) }));
+  const opts = { provider: target.provider, model: target.model, system: wellFormed(system), messages: clean, maxTokens, temperature: 0.5, signal, ...(tools ? { tools } : {}), ...(effort ? { reasoningEffort: effort } : {}) };
   for await (const ch of llm.stream(opts)) {
     if (ch?.type === 'block-end' && ch.block) blocks.push(ch.block);
     else if (ch?.type === 'usage') usage = ch.usage;

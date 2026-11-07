@@ -12,6 +12,7 @@ import { pipeline } from 'node:stream/promises';
 import { DEFAULT_FFMPEG, DEFAULT_FFPROBE } from 'dsh-video-storyboard/probe';
 import { UA } from './bili-api.js';
 import { localBin } from './ffmpeg-fetch.js';
+import { errText } from './net.js';
 
 const REFERER = 'https://www.bilibili.com';
 const CODEC_RANK = { hev1: 0, hvc1: 0, avc1: 1, av01: 2 };
@@ -75,16 +76,16 @@ export function resetFfmpegCheck() { ffmpegChecked.clear(); }
 export const mediaDirOf = (cfg) => cfg.mediaDir || path.join(os.tmpdir(), 'dsh-bili-eyes', 'media');
 
 async function download(urls, file, signal) {
-  let last;
+  let last; let lastUrl;
   for (const url of urls) {
     try {
       const r = await fetch(url, { headers: { 'user-agent': UA, referer: REFERER }, signal });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       await pipeline(Readable.fromWeb(r.body), fs.createWriteStream(file));
       return;
-    } catch (e) { last = e; if (signal?.aborted) break; }
+    } catch (e) { last = e; lastUrl = url; if (signal?.aborted) break; }
   }
-  throw new Error(`下载失败：${last?.message ?? last}`);
+  throw new Error(`视频下载失败：${errText(last, lastUrl)}`);
 }
 
 function run(bin, args, timeoutMs) {

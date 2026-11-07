@@ -12,6 +12,7 @@ import { loadCredential, saveCredential, removeCredential, qrGenerate, qrPoll } 
 import { readHistory, clearHistory } from './history.js';
 import { look, lookZoom, find, usage, resetLoginCache, makeClient, InputError } from './look.js';
 import { BiliError } from './bili-api.js';
+import { NetError } from './net.js';
 import { feed } from './feed.js';
 import { surf } from './surf.js';
 import { loadTrails } from './surf-agent.js';
@@ -139,7 +140,7 @@ async function loginInfo(force = false) {
         ? { state: 'ok', uname: nav.uname ?? cred.uname ?? '', mid: nav.mid ?? cred.mid ?? 0, vip: Boolean(nav.vipStatus), level: nav.level_info?.current_level ?? null, savedAt: cred.savedAt ?? '' }
         : { state: 'expired', uname: cred.uname ?? '', savedAt: cred.savedAt ?? '' };
     } catch (e) {
-      value = { state: 'unknown', uname: cred.uname ?? '', savedAt: cred.savedAt ?? '', error: String(e.message).slice(0, 120) };
+      value = { state: 'unknown', uname: cred.uname ?? '', savedAt: cred.savedAt ?? '', error: e instanceof NetError ? e.message : String(e.message).slice(0, 120) };
     }
   }
   loginCache = { at: Date.now(), value };

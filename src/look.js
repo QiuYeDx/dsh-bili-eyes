@@ -29,7 +29,13 @@ export const fmtDur = (s) => {
   return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
 };
 export const fmtNum = (n) => (n >= 1e8 ? `${(n / 1e8).toFixed(1)}亿` : n >= 1e4 ? `${(n / 1e4).toFixed(1)}万` : String(n ?? 0));
-export const clip = (s, n) => { s = String(s ?? '').replace(/\s+/g, ' ').trim(); return s.length > n ? `${s.slice(0, n)}…` : s; };
+// 落单的半个代理对（emoji 被按 UTF-16 截断，或者 B站数据本身就残缺）不是合法 UTF-8：发给模型整个请求会 400，
+// 而且这条工具结果留在会话历史里，之后每一轮都 400。凡是要进模型的文字都过一遍。
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+export const wellFormed = (s) => String(s ?? '').replace(LONE_SURROGATE, '�');
+/** 按完整字符截断，不会把 emoji 切成两半 */
+export const cut = (s, n) => { s = wellFormed(s); const cs = Array.from(s); return cs.length > n ? cs.slice(0, n).join('') : s; };
+export const clip = (s, n) => { s = wellFormed(s).replace(/\s+/g, ' ').trim(); const cs = Array.from(s); return cs.length > n ? `${cs.slice(0, n).join('')}…` : s; };
 
 // 格子数按时长定：太少看不清在讲什么，太多每格太小（一张图的 token 是固定的）
 export function cellsFor(seconds) {

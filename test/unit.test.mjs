@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { parseInput, resolveShort, canonicalUrl, InputError } from '../src/url.js';
 import { wbiMixinKey, wbiSign, dmParams } from '../src/bili-api.js';
 import { parseDanmaku, danmakuStats, normalizeDanmaku } from '../src/danmaku.js';
-import { compactCells, cellsFor, fitCells, isAd, sheetsFor, timeoutFor, formatFind, find, FIND_NOTE } from '../src/look.js';
+import { compactCells, cellsFor, fitCells, isAd, sheetsFor, timeoutFor, formatFind, find, FIND_NOTE, clip, cut, wellFormed } from '../src/look.js';
 import { parseSearchItem, parseClock } from '../src/bili-api.js';
 
 test('搜索结果解析与清单', async () => {
@@ -152,4 +152,14 @@ test('ffmpeg 路径：设置里填了就用它，ffprobe 取同目录', async ()
   const b = mediaBins({ ffmpegPath: 'Z:/nowhere/ffmpeg.exe' });
   assert.equal(b.ffmpegPath, 'Z:/nowhere/ffmpeg.exe');
   assert.ok(b.ffprobePath, '同目录没有 ffprobe 时退回默认');
+});
+
+test('截断不会把 emoji 切成半个（半个代理对会让模型请求 400）', () => {
+  const s = '你带我走吧😭😭😭';
+  assert.equal(clip(s, 7), '你带我走吧😭😭…');
+  assert.equal(cut(s, 6), '你带我走吧😭');
+  assert.equal(wellFormed(s.slice(0, 8)), '你带我走吧😭�');
+  assert.equal(wellFormed('\uDC00a\uD83D'), '�a�');
+  assert.equal(wellFormed('a😭b'), 'a😭b');
+  assert.ok(clip(`${'x'.repeat(59)}😭😭`, 60).isWellFormed());
 });

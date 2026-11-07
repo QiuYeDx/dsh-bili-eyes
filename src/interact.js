@@ -2,7 +2,7 @@
 import { loadConfig, DEFAULTS, isFriend } from './config.js';
 import { videoUp, videoAudience, replyAudience } from './audience.js';
 import { loadCredential } from './credential.js';
-import { InputError, makeClient, resolveVideo, clip } from './look.js';
+import { InputError, makeClient, resolveVideo, clip, wellFormed } from './look.js';
 import { request, confirm, checkText, loadDrafts, readAudit, ownFollows, ownFavs, ActError } from './act.js';
 import { resolveUp } from './feed.js';
 import { watchedUp } from './seen-ups.js';
@@ -352,7 +352,7 @@ export function makeAsk(llm, exec, cfg, host = null) {
     if (effort === undefined) effort = (await lowestEffort(llm, target)) ?? null;
     let out = '';
     const signal = AbortSignal.timeout(timeoutMs);
-    for await (const chunk of llm.stream({ provider: target.provider, model: target.model, system, messages: [{ role: 'user', content: [{ type: 'text', text: user }] }], maxTokens, temperature: 0.3, signal, ...(effort ? { reasoningEffort: effort } : {}) })) {
+    for await (const chunk of llm.stream({ provider: target.provider, model: target.model, system: wellFormed(system), messages: [{ role: 'user', content: [{ type: 'text', text: wellFormed(user) }] }], maxTokens, temperature: 0.3, signal, ...(effort ? { reasoningEffort: effort } : {}) })) {
       if (chunk?.type === 'text-delta') out += chunk.text;
       if (chunk?.type === 'finish' && (chunk.reason?.kind === 'error' || chunk.reason?.kind === 'aborted')) {
         throw new Error(chunk.reason.failure?.message || chunk.reason.failure?.code || chunk.reason.kind);

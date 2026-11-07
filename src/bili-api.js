@@ -3,6 +3,7 @@
 // 写操作只在这里发请求；要不要发、发给谁、发几条由 act.js 决定。不实现投币、拉黑、改资料、上传。
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
+import { netError } from './net.js';
 
 export const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
 const MIXIN_TAB = [46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52];
@@ -167,7 +168,9 @@ export class BiliClient {
       }
       throw new BiliError('B站接口限流（412），稍后再试', 412);
     };
-    const p = this.queue.then(run, run);
+    // 连不上（fetch failed）翻成人话：DNS、被断开、超时、证书分别说清
+    const guarded = () => run().catch((e) => { throw netError(e, url) ?? e; });
+    const p = this.queue.then(guarded, guarded);
     this.queue = p.catch(() => {});
     return p;
   }
@@ -183,12 +186,15 @@ export class BiliClient {
 
   async nav() {
     // 未登录时 nav 返回 code -101，但 data 里照样有 wbi_img，所以这里不走 request() 的 code 检查
-    const r = await this.fetchImpl('https://api.bilibili.com/x/web-interface/nav', {
-      headers: { 'user-agent': UA, referer: 'https://www.bilibili.com/', cookie: this.cookieHeader() },
-      signal: AbortSignal.timeout(10_000),
-    });
-    const j = await r.json();
-    return j.data ?? {};
+    const url = 'https://api.bilibili.com/x/web-interface/nav';
+    try {
+      const r = await this.fetchImpl(url, {
+        headers: { 'user-agent': UA, referer: 'https://www.bilibili.com/', cookie: this.cookieHeader() },
+        signal: AbortSignal.timeout(10_000),
+      });
+      const j = await r.json();
+      return j.data ?? {};
+    } catch (e) { throw netError(e, url) ?? e; }
   }
 
   async mixinKey() {
@@ -256,9 +262,12 @@ export class BiliClient {
   /** 下载一条字幕正文：subtitle_url 是带时效的签名地址，拿到就立刻下载。 */
   async subtitleBody(subtitleUrl) {
     const url = subtitleUrl.startsWith('//') ? `https:${subtitleUrl}` : subtitleUrl;
-    const r = await this.fetchImpl(url, { headers: { 'user-agent': UA }, signal: AbortSignal.timeout(12_000) });
+    let r; let j;
+    try {
+      r = await this.fetchImpl(url, { headers: { 'user-agent': UA }, signal: AbortSignal.timeout(12_000) });
+      if (r.ok) j = await r.json();
+    } catch (e) { throw netError(e, url) ?? e; }
     if (!r.ok) throw new BiliError(`字幕下载失败 HTTP ${r.status}`, r.status);
-    const j = await r.json();
     return (j.body ?? []).map((x) => ({ start: x.from, end: x.to, text: String(x.content ?? '').trim() })).filter((x) => x.text);
   }
 
