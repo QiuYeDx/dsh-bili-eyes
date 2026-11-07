@@ -636,7 +636,8 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
                   const ins = x.id === 'ffmpeg' ? (dl ?? x.install) : null;
                   return h('li', { key: x.id, className: 'be-check' },
                     h('span', { className: `be-dot ${x.ok ? 'ok' : x.optional ? 'opt' : 'bad'}` }, x.ok ? '✓' : x.optional ? '–' : '!'),
-                    h('div', { style: { minWidth: 0 } }, h('div', { style: { overflowWrap: 'anywhere' } }, x.label), x.hint && h('div', { className: 'be-faint' }, x.hint),
+                    h('div', { style: { minWidth: 0 } }, h('div', { style: { overflowWrap: 'anywhere' } }, x.label), x.hint && h('div', { className: 'be-faint', style: { overflowWrap: 'anywhere' } }, x.hint),
+                      x.go && h('div', { className: 'be-row' }, h(Btn, { onClick: () => go(...x.go) }, '去设置')),
                       ins && (ins.running
                         ? h('div', { className: 'be-row' }, h('span', { className: 'be-spin' }), h('span', { className: 'be-faint' }, ins.phase || '下载中'))
                         : !x.ok && h('div', { className: 'be-row' }, h(Btn, { kind: 'primary', onClick: install }, '下载 ffmpeg'), ins.error && h('span', { className: 'be-err' }, ins.error)))));
@@ -644,7 +645,7 @@ background:var(--b1) no-repeat right 9px center/9px 6px;color:var(--t2);transiti
                 h('div', { className: 'be-row' }, h(Btn, { onClick: () => { st.reload(); toast('已刷新'); } }, '重新检查'), !bad.length && h(Btn, { onClick: () => setShowChecks(false) }, '收起')))
               : h('div', { className: 'be-sumline' },
                 h('span', { className: 'be-dot ok' }, '✓'),
-                h('span', null, `基本功能都正常${optional.length ? `，${optional.length} 个可选项没配（${optional.map((x) => ({ login: 'B站登录', owner: '主人 UID', asr: '语音识别', inbox: '收件箱', ytdlp: 'yt-dlp', gate: '门卫', disk: '下载目录' }[x.id] ?? x.id)).join('、')}）` : ''}`),
+                h('span', null, `基本功能都正常${optional.length ? `，${optional.length} 个可选项没配（${optional.map((x) => ({ login: 'B站登录', owner: '主人 UID', asr: '语音识别', inbox: '收件箱', ytdlp: 'yt-dlp', gate: '门卫', disk: '下载目录' }[x.id] ?? (x.id.startsWith('dshqq:') ? 'dsh-qq 补丁' : x.id))).join('、')}）` : ''}`),
                 h('button', { type: 'button', className: 'be-link', onClick: () => setShowChecks(true) }, '展开'))));
       });
     }

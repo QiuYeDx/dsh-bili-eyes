@@ -3,6 +3,15 @@
 这个文件记录 dsh-bili-eyes（B站伙伴）每个版本的变化，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 还没发布的改动写在最上面标着「（未发布）」的那一节，发版时换成日期，底下的链接改成指向 tag。
 
+## [0.8.3]（未发布）
+
+### 新增
+
+- **「概览 → 安装检查」提醒 dsh-qq 桥接的补丁没打**：原来补丁状态只在「收件箱 → 设置 → 门卫」里显示，只想让她在群里看视频、没碰过门卫的人不知道要「一键适配」，群里的 B站分享卡片她只看到「[卡片消息]」，拿不到链接（dsh-qq 上游到现在还是这样显示卡片）。现在安装检查里每个 dsh-qq 桥接一条，说清缺了哪个补丁、会怎样，带「去设置」按钮：
+  - 桥接从门卫里填的目录找，也从 DSH 会话的工作目录往上找（dsh-qq 的会话默认开在 `<桥接>/state/agents`），没填门卫的也认得出来，并告诉他门卫来源选「dsh-qq」、桥接目录填哪个；
+  - 分享卡片没打、工具白名单缺工具算要紧（「!」，安装检查自动展开）；只差「偶发报错不发群里」算可选；
+  - 补丁打上了、但桥接是改之前启动的（`state/bridge.lock` 比 `src/bridge.js` 旧），提醒重启桥接。
+
 ## [0.8.2] - 2026-11-07
 
 这一版有两件事，都来自用户反馈。一是修一个会让 QQ 群「卡死」的问题：她看过的视频热评里有 emoji 被截成半个，DeepSeek 拒收整个请求（`Messages request failed (400)`），而这条看视频的结果留在会话历史里，那个会话之后每一轮都 400，直到历史被修好。二是**连不上 B站时说清原因**：原来所有工具只报一句 `Error: fetch failed`，没法排查。
@@ -191,6 +200,7 @@
 
 - `bili_look` / `bili_look_zoom`：看 B站视频。分镜图（格号烧在图上）+ 每格的时间和台词 + 标题、UP、标签、简介、热评、弹幕热词和最密集的时段；放大看某几秒。只读，只认 B站。
 
+[0.8.3]: https://github.com/QiuYeDx/dsh-bili-eyes/compare/v0.8.2...HEAD
 [0.8.2]: https://github.com/QiuYeDx/dsh-bili-eyes/releases/tag/v0.8.2
 [0.8.1]: https://github.com/QiuYeDx/dsh-bili-eyes/releases/tag/v0.8.1
 [0.8.0]: https://github.com/QiuYeDx/dsh-bili-eyes/releases/tag/v0.8.0

@@ -26,7 +26,7 @@ import { checkBridge } from './adapters/dsh-qq.js';
 import { loadEngine, saveEngine, engineLock, engineCount, ACTION_TEXT, CATS } from './engine.js';
 import { pollGuard, videoList, togglePatch } from './guard.js';
 import { asrView, saveAsr, clearAsr, testAsr } from './asr-config.js';
-import { patchStatus, applyPatches } from './adapters/dsh-qq-patch.js';
+import { patchStatus, applyPatches, findBridgeDirs, patchCheck } from './adapters/dsh-qq-patch.js';
 import { mediaBins, mediaDirOf, resetFfmpegCheck } from './media.js';
 import { installFfmpeg, installState } from './ffmpeg-fetch.js';
 import { updateState, checkUpdate, checkUpdateIfStale, installInfo, changelogFor, QQ_GROUP } from './update.js';
@@ -147,6 +147,16 @@ async function loginInfo(force = false) {
   return value;
 }
 
+// 「安装检查」里的 dsh-qq 补丁：门卫里填的桥接目录，加上 DSH 会话里出现过的桥接（没碰过门卫的人也看得到补丁没打）。
+// 找桥接要扫会话目录，10 分钟找一次；补丁状态每次现读。
+let bridgeScan = { at: 0, dirs: [] };
+function bridgeChecks(cfg, judged) {
+  if (Date.now() - bridgeScan.at > 600_000) bridgeScan = { at: Date.now(), dirs: findBridgeDirs(path.join(DSH_HOME, 'sessions'), judged.map((j) => j.cwd)) };
+  const dirs = [...bridgeScan.dirs];
+  if (cfg.qqBridgeDir && !dirs.some((d) => path.resolve(d).toLowerCase() === path.resolve(cfg.qqBridgeDir).toLowerCase())) dirs.unshift(cfg.qqBridgeDir);
+  return dirs.map((d) => { try { return patchCheck(d, cfg.qqBridgeDir); } catch { return null; } }).filter(Boolean);
+}
+
 // 扫码登录：二维码的 key 只留在服务端，界面只拿到图片
 let pendingLogin = null;
 
@@ -193,6 +203,7 @@ async function getView(view, ctx, q = new URLSearchParams()) {
         { id: 'login', ok: login.state === 'ok', optional: true, label: login.state === 'ok' && login.level != null ? `${loginText}（LV${login.level}）` : loginText, hint: login.state === 'ok' ? (login.level === 0 ? 'LV0 不能发评论：去 B站 App 答题转正' : '') : '可选：不登录也能看视频；登录后才有 AI 字幕、AI 总结、1080P 放大、个性化推荐、关注动态、收件箱和写操作（建议用小号）' },
         { id: 'owner', ok: cfg.ownerMid > 0, optional: true, label: cfg.ownerMid > 0 ? `主人 UID：${cfg.ownerMid}` : '没设置主人的 B站 UID', hint: cfg.ownerMid > 0 ? '' : '可选：设置后她才能 @ 主人、私信主人、转达主人的私信（「互动 → 设置」）' },
         { id: 'gate', ok: true, optional: gk === 'builtin', label: { service: '门卫：桥接插件提供', 'dsh-qq': `门卫：dsh-qq 桥接（${cfg.qqBridgeDir}）`, http: `门卫：${cfg.gateUrl}`, builtin: '门卫：内置（按会话的 agentPreset / 工作目录判断）' }[gk], hint: (gk === 'builtin' ? '内置门卫只是推断：本机会话「先问主人」时弹 DSH 审批卡片；桥接会话只能起草、在「互动 → 待同意」里同意；收件箱没处转达。接 QQ 等桥接时最好让桥接提供门卫（docs/门卫协议.md）。' : '') + (judged.length ? ` 最近的会话：${judged.slice(0, 4).map((j) => `${j.label}${j.trusted ? '✓' : '✗'}`).join('，')}` : '') },
+        ...bridgeChecks(cfg, judged),
         { id: 'inbox', ok: cfg.inboxOn, optional: true, label: cfg.inboxOn ? `收件箱：每 ${cfg.inboxIntervalSeconds} 秒查一次${cfg.inboxQuiet ? `，${cfg.inboxQuiet} 不查` : ''}` : '收件箱没开', hint: cfg.inboxOn ? (gk === 'builtin' ? '没接门卫：新消息不会主动转达，她下次用 B站工具时会提一句' : '') : '可选：在「收件箱 → 设置」里打开后，别人回复、@、私信会转达给她' },
         { id: 'disk', ok: !onC(mediaDirOf(cfg)), optional: true, label: `下载的视频放在 ${mediaDirOf(cfg)}`, hint: onC(mediaDirOf(cfg)) ? '在系统盘：视频多了占地方，可以在「设置 → 存储」换到别的盘' : '' },
         ...(registered && emoteStale(cfg, loadStickers().list) && !ctx.refreshTools?.() ? [{ id: 'emote', ok: false, optional: true, label: '表情设置改过了，但她的工具说明没更新上', hint: '平时改了马上就会更新；这次没更新上（看 DSH 日志里的「更新评论工具的说明失败」）。重启 DSH 就好。不能用的表情已经不让用了' }] : []),

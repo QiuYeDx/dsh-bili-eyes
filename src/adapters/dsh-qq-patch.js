@@ -6,6 +6,7 @@
 // 第一次改某个文件前备份成 <文件>.bak-bili-eyes（已有备份就不覆盖）。还原 = 把补丁去掉，换回原来那一行。
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { ALL_TOOLS } from '../tool-list.js';
 
 export function bridgeFiles(dir) {
@@ -76,7 +77,69 @@ export function patchStatus(dir) {
     whitelist: whitelist(r, ALL_TOOLS),
     card: state(b, (s) => CARD_RE.test(s), CARD_ORIGINAL),
     errors: state(b, (s) => s.includes(ERR_PATCHED), ERR_ORIGINAL),
+    // 桥接每次启动都重写 state/bridge.lock：比 bridge.js 旧，说明卡片、报错补丁打上之后还没重启过桥接
+    staleBridge: (() => { try { return fs.statSync(path.join(dir, 'state', 'bridge.lock')).mtimeMs < fs.statSync(f.bridge).mtimeMs; } catch { return false; } })(),
   };
+}
+
+// ── 找桥接 ────────────────────────────────────────────────────────────────
+// 没在门卫里填桥接目录的人（只想让她在群里看视频，没碰过门卫）也该知道补丁没打。
+// dsh-qq 的会话默认开在 <桥接>/state/agents，所以从 DSH 会话的工作目录往上找。
+
+export const isBridgeDir = (dir) => { const f = bridgeFiles(dir); return fs.existsSync(f.bridge) && fs.existsSync(f.restrict); };
+
+/** 会话工作目录 → 它所在的 dsh-qq 桥接目录（往上找几层），不是就返回 '' */
+export function bridgeDirOf(cwd) {
+  if (!cwd) return '';
+  let d = path.resolve(String(cwd));
+  for (let i = 0; i < 4; i += 1) {
+    if (isBridgeDir(d)) return d;
+    const up = path.dirname(d);
+    if (up === d) break;
+    d = up;
+  }
+  return '';
+}
+
+/** 一个会话日志的第一行（会话头，里面有 cwd）。.zstd 是一串独立的帧，只解第一帧 */
+function sessionHead(file) {
+  try {
+    let text;
+    if (file.endsWith('.zstd')) {
+      if (typeof zlib.zstdDecompressSync !== 'function') return null;
+      const buf = fs.readFileSync(file);
+      const next = buf.indexOf(ZSTD_MAGIC, 4);
+      text = zlib.zstdDecompressSync(next > 0 ? buf.subarray(0, next) : buf).toString('utf8');
+    } else {
+      const fd = fs.openSync(file, 'r');
+      try { const b = Buffer.alloc(4096); text = b.subarray(0, fs.readSync(fd, b, 0, b.length, 0)).toString('utf8'); } finally { fs.closeSync(fd); }
+    }
+    return JSON.parse(text.split('\n')[0]);
+  } catch { return null; }
+}
+const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
+
+/**
+ * DSH 会话里出现过的 dsh-qq 桥接目录。sessions 是 DSH 的会话目录（<DSH_HOME>/sessions）：
+ * 每个项目目录（按工作目录分）只读一个会话的会话头。extra 是另外知道的工作目录（比如最近判定过的会话）。
+ */
+export function findBridgeDirs(sessions, extra = []) {
+  const cwds = new Set(extra.filter(Boolean));
+  let projects = [];
+  try { projects = fs.readdirSync(sessions, { withFileTypes: true }).filter((x) => x.isDirectory()); } catch { /* 没有会话目录 */ }
+  for (const p of projects.slice(0, 200)) {
+    try {
+      const dir = path.join(sessions, p.name);
+      const one = fs.readdirSync(dir, { withFileTypes: true }).find((x) => x.isDirectory());
+      if (!one) continue;
+      const file = fs.readdirSync(path.join(dir, one.name)).filter((x) => /^session(\.v\d+)?\.jsonl(\.zstd)?$/.test(x)).sort().pop();
+      const head = file && sessionHead(path.join(dir, one.name, file));
+      if (head?.cwd) cwds.add(head.cwd);
+    } catch { /* 读不了就跳过 */ }
+  }
+  const out = new Set();
+  for (const c of cwds) { const b = bridgeDirOf(c); if (b) out.add(b); }
+  return [...out];
 }
 
 /** 打补丁（revert=true 时还原）。返回每一项做了什么：[{item, result, text}]，result：done / skip / fail。 */
@@ -125,4 +188,34 @@ export function applyPatches(dir, { revert = false, tools = ALL_TOOLS } = {}) {
     if (changed) write(f.bridge, src);
   }
   return out;
+}
+
+const sameDir = (a, b) => {
+  const n = (x) => path.resolve(String(x)).replace(/[\/]+$/, '');
+  return process.platform === 'win32' ? n(a).toLowerCase() === n(b).toLowerCase() : n(a) === n(b);
+};
+
+/**
+ * 设置页「安装检查」的一条：这个 dsh-qq 桥接的补丁打没打。configuredDir 是门卫里填的桥接目录。
+ * 卡片没打（她只看到「[卡片消息]」）、白名单缺工具、打了没重启算要紧；只差「偶发报错不发群里」算可选。
+ */
+export function patchCheck(dir, configuredDir, st = patchStatus(dir)) {
+  const where = `dsh-qq 桥接（${dir}）`;
+  if (!st.ok) return { id: `dshqq:${dir}`, ok: false, optional: true, label: `${where}：${st.error}`, hint: '' };
+  const severe = []; const minor = [];
+  if (!st.whitelist.found) severe.push('桥接版本变了，找不到工具白名单（SAFE_EXACT）');
+  else if (st.whitelist.missing.length) severe.push(`工具白名单缺 ${st.whitelist.missing.length} 个，QQ 里她用不了 ${st.whitelist.missing.slice(0, 4).join('、')}${st.whitelist.missing.length > 4 ? ' 等' : ''}`);
+  if (st.card === 'original') severe.push('分享卡片补丁没打：群里有人发 B站分享卡片时她只看到「[卡片消息]」，拿不到链接');
+  else if (st.card === 'unknown') severe.push('桥接版本变了，分享卡片补丁认不出');
+  if (st.errors === 'original') minor.push('偶发报错补丁没打：模型偶尔出错时群里会收到「AI 处理出错」');
+  else if (st.errors === 'unknown') minor.push('桥接版本变了，偶发报错补丁认不出');
+  const onlyRestart = !severe.length && !minor.length && st.staleBridge;
+  if (onlyRestart) severe.push('补丁打上了，但桥接还是改之前启动的，卡片还是「[卡片消息]」');
+  const problems = [...severe, ...minor];
+  if (!problems.length) return { id: `dshqq:${dir}`, ok: true, label: `${where}：补丁都打上了` };
+  const configured = configuredDir && sameDir(configuredDir, dir);
+  const hint = onlyRestart ? '在桥接的控制中心重启一次桥接'
+    : configured ? '去「收件箱 → 设置 → 门卫」点「一键适配」，再在桥接的控制中心重启桥接'
+      : `去「收件箱 → 设置 → 门卫」：门卫来源选「dsh-qq」、桥接目录填 ${dir}，保存后点「一键适配」，再在桥接的控制中心重启桥接`;
+  return { id: `dshqq:${dir}`, ok: false, optional: !severe.length, label: `${where}：${problems.join('；')}`, hint, go: onlyRestart ? null : ['inbox', 'settings'] };
 }

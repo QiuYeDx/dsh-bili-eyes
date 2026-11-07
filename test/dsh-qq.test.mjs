@@ -8,7 +8,7 @@ import path from 'node:path';
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bili-eyes-dshqq-'));
 process.env.DSH_HOME = tmp;
 const { dshQqGate, bridgeSettings } = await import('../src/adapters/dsh-qq.js');
-const { patchStatus, applyPatches } = await import('../src/adapters/dsh-qq-patch.js');
+const { patchStatus, applyPatches, findBridgeDirs, bridgeDirOf, patchCheck } = await import('../src/adapters/dsh-qq-patch.js');
 const { gateKind, sessionContext } = await import('../src/gate.js');
 const { DEFAULTS } = await import('../src/config.js');
 
@@ -140,4 +140,59 @@ test('桥接补丁：桥接版本变了（找不到要改的行）就跳过并�
   const steps = applyPatches(dir);
   assert.deepEqual(steps.filter((s) => s.result === 'fail').map((s) => s.item), ['card', 'errors']);
   assert.equal(fs.readFileSync(path.join(dir, 'src', 'bridge.js'), 'utf8'), '// 新版本，代码全变了\n');
+});
+
+test('找桥接：从 DSH 会话的工作目录往上找；.jsonl 和 .zstd 会话头都认', async () => {
+  const zlib = await import('node:zlib');
+  const { dir } = fakeBridgeSrc();
+  fs.mkdirSync(path.join(dir, 'state', 'agents'), { recursive: true });
+  const sessions = fs.mkdtempSync(path.join(tmp, 'sessions-'));
+  const head = (cwd) => `${JSON.stringify({ type: 'session', version: 4, id: 'session-x', cwd })}\n`;
+  const put = (proj, file, data) => { const d = path.join(sessions, proj, 'session-1'); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, file), data); };
+  put('--bridge--', 'session.v3.jsonl', head(path.join(dir, 'state', 'agents')));
+  put('--home--', 'session.v3.jsonl', head(os.homedir()));
+  put('--broken--', 'session.v4.jsonl.zstd', 'not zstd');
+  assert.equal(bridgeDirOf(path.join(dir, 'state', 'agents')), dir);
+  assert.equal(bridgeDirOf(tmp), '');
+  assert.deepEqual(findBridgeDirs(sessions), [dir]);
+  assert.deepEqual(findBridgeDirs(path.join(tmp, 'no-such-dir'), [path.join(dir, 'state')]), [dir], '没有会话目录时用另外给的工作目录');
+  if (typeof zlib.zstdCompressSync === 'function') {
+    const other = fakeBridgeSrc().dir;
+    const frame = (s) => zlib.zstdCompressSync(Buffer.from(s));
+    put('--zstd--', 'session.v4.jsonl.zstd', Buffer.concat([frame(head(other)), frame('{"type":"x"}\n')]));
+    assert.deepEqual(findBridgeDirs(sessions).sort(), [dir, other].sort());
+  }
+});
+
+test('安装检查：卡片补丁没打要说清后果；没填门卫的告诉他怎么填；打了没重启也提醒', () => {
+  const { dir } = fakeBridgeSrc();
+  const raw = patchCheck(dir, '');
+  assert.equal(raw.ok, false);
+  assert.equal(raw.optional, false);
+  assert.match(raw.label, /「\[卡片消息\]」/);
+  assert.match(raw.label, /工具白名单缺 \d+ 个/);
+  assert.match(raw.hint, /门卫来源选「dsh-qq」、桥接目录填 /);
+  assert.deepEqual(raw.go, ['inbox', 'settings']);
+  assert.match(patchCheck(dir, `${dir}${path.sep}`).hint, /^去「收件箱 → 设置 → 门卫」点「一键适配」/, '门卫里填的就是这个桥接');
+
+  applyPatches(dir);
+  fs.mkdirSync(path.join(dir, 'state'), { recursive: true });
+  const lock = path.join(dir, 'state', 'bridge.lock');
+  fs.writeFileSync(lock, '1');
+  const old = new Date(Date.now() - 60_000); fs.utimesSync(lock, old, old);
+  const stale = patchCheck(dir, dir);
+  assert.equal(stale.ok, false);
+  assert.match(stale.label, /还是改之前启动的/);
+  assert.equal(stale.hint, '在桥接的控制中心重启一次桥接');
+  fs.utimesSync(lock, new Date(), new Date(Date.now() + 1000));
+  assert.deepEqual([patchCheck(dir, dir).ok, patchCheck(dir, dir).label.endsWith('补丁都打上了')], [true, true]);
+
+  // 只差「偶发报错」算可选
+  const { dir: d2 } = fakeBridgeSrc();
+  applyPatches(d2);
+  const src = fs.readFileSync(path.join(d2, 'src', 'bridge.js'), 'utf8');
+  fs.writeFileSync(path.join(d2, 'src', 'bridge.js'), src.replace(/if \(!silent && d\.code !== 'MALFORMED_RESPONSE'\)[^\r\n]*/, "if (!silent) await sendToQQ(key, agentErrorUserText(d, { audited: shouldAuditKey(key) }));"));
+  const minor = patchCheck(d2, d2);
+  assert.deepEqual([minor.ok, minor.optional], [false, true]);
+  assert.match(minor.label, /偶发报错补丁没打/);
 });
