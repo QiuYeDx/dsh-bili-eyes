@@ -171,3 +171,48 @@ test('自己逛的动态每天最多一条；没接门卫时草稿只留在「�
   assert.deepEqual(r.drafts, { ids: [3], notify: 'no-gate' });
   assert.equal(f.calls.notify.length, 0);
 });
+
+test('一圈里连着点赞、收藏：等够间隔再发，不再被「太近」拦下', async () => {
+  const f = fakes({ decision: { likes: [1, 2], favs: [{ i: 2, why: '想留着' }] } });
+  const slept = [];
+  f.deps.sleep = async (ms) => { slept.push(ms); };
+  const seen = new Set();
+  f.deps.request = async (req) => {
+    const key = `${req.kind}:${req.payload.aid}`;
+    f.calls.request.push(key);
+    if (!seen.has(key)) { seen.add(key); return { status: 'refused', wait: 4, text: '离上一次写操作太近，4 秒后再试' }; }
+    return { status: 'sent', text: 'ok' };
+  };
+  const cfg = { ...DEFAULTS, autoSurfComment: false, autoSurfRecommend: '', permLikeOut: 'auto', permLikeOwn: 'auto' };
+  const r = await autoSurfOnce({ cfg, ask: f.ask, deps: f.deps });
+  assert.deepEqual(r.likes.map((x) => x.status), ['sent', 'sent']);
+  assert.equal(r.favs[0].status, 'sent');
+  assert.deepEqual(f.calls.request, ['like:11', 'like:11', 'like:22', 'like:22', 'fav:22', 'fav:22']);
+  assert.deepEqual(slept, [5000, 5000, 5000]);
+});
+
+test('等太久、或者不是间隔的拒绝，不重试', async () => {
+  for (const refused of [{ status: 'refused', wait: 3600, text: '太近' }, { status: 'refused', text: '额度用完了' }]) {
+    const f = fakes({ decision: { likes: [1] } });
+    const slept = [];
+    f.deps.sleep = async (ms) => { slept.push(ms); };
+    f.deps.request = async (req) => { f.calls.request.push(req.kind); return refused; };
+    const cfg = { ...DEFAULTS, autoSurfComment: false, autoSurfRecommend: '', autoSurfFav: false, permLikeOut: 'auto', permLikeOwn: 'auto' };
+    const r = await autoSurfOnce({ cfg, ask: f.ask, deps: f.deps });
+    assert.equal(r.likes[0].status, 'refused');
+    assert.deepEqual(f.calls.request, ['like']);
+    assert.deepEqual(slept, []);
+  }
+});
+
+test('一直被拦也只重试两次', async () => {
+  const f = fakes({ decision: { likes: [1] } });
+  const slept = [];
+  f.deps.sleep = async (ms) => { slept.push(ms); };
+  f.deps.request = async (req) => { f.calls.request.push(req.kind); return { status: 'refused', wait: 5, text: '太近' }; };
+  const cfg = { ...DEFAULTS, autoSurfComment: false, autoSurfRecommend: '', autoSurfFav: false, permLikeOut: 'auto', permLikeOwn: 'auto' };
+  const r = await autoSurfOnce({ cfg, ask: f.ask, deps: f.deps });
+  assert.equal(r.likes[0].status, 'refused');
+  assert.equal(f.calls.request.length, 3);
+  assert.equal(slept.length, 2);
+});

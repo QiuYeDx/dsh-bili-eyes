@@ -170,13 +170,23 @@ export function parseDecision(text, n) {
 
 export const waysOf = (cfg) => String(cfg.autoSurfRecommend ?? '').split(',').map((x) => x.trim()).filter((x) => RECOMMEND_WAYS.some(([k]) => k === x));
 
+const MAX_PACE_S = 90;   // 再久就不等了，照实记成被拦下（主人可能把间隔设得很长）
+/** 一圈里连着做几件事时，等够 act.js 要的间隔再发。间隔多长由 act.js 说了算，这里只照它给的 wait 等。 */
+async function paced(d, req, opt) {
+  for (let i = 0; ; i += 1) {
+    const res = await d.request(req, opt);
+    if (res?.status !== 'refused' || !(res.wait > 0) || res.wait > MAX_PACE_S || i >= 2) return res;
+    await d.sleep((res.wait + 1) * 1000);
+  }
+}
+
 let running = false;
 /**
  * 逛一次（到点了或者设置页点「现在逛一次」）。返回这次的记录。
  * @param {{cfg?, ask, log?, now?, reason?:'schedule'|'manual', deps?:{surf, request, notify, writeClient, ownerName}}} o
  */
 export async function autoSurfOnce({ cfg = loadConfig(), ask, log = () => {}, now = Date.now(), reason = 'schedule', deps = {} } = {}) {
-  const d = { surf, request, notify, writeClient, ownerName, readAudit: () => readAudit(2000), ...deps };
+  const d = { surf, request, notify, writeClient, ownerName, readAudit: () => readAudit(2000), sleep: (ms) => new Promise((r) => setTimeout(r, ms)), ...deps };
   if (running) return { at: now, ok: false, error: '上一次还没逛完' };
   running = true;
   const rec = { at: now, reason, ok: false, picks: [], comments: [], recommend: null, error: '' };
@@ -218,7 +228,7 @@ export async function autoSurfOnce({ cfg = loadConfig(), ask, log = () => {}, no
         if (!hasWords(tidy)) throw new Error('顶层评论要有字，不能只发表情');
         const text = checkText('comment', tidy, { ownerName: name, mention: c.mention });   // 和工具一样的正文检查
         const v = await client.view({ bvid: x.bvid });
-        const res = await d.request({ kind: 'comment', payload: { oid: String(v.aid), type: 1, root: '0', parent: '0', text, ...(c.mention ? { atNameToMid: { [name]: cfg.ownerMid } } : {}) }, preview: `在《${clip(x.title, 30)}》下评论：${clip(text, 60)}`, target: { oid: String(v.aid), type: 1, root: '0', parent: '0', bvid: x.bvid, title: x.title, url: `https://www.bilibili.com/video/${x.bvid}`, to: c.mention ? name : '' }, audience: videoAudience(cfg, v.owner?.mid) }, opt);
+        const res = await paced(d, { kind: 'comment', payload: { oid: String(v.aid), type: 1, root: '0', parent: '0', text, ...(c.mention ? { atNameToMid: { [name]: cfg.ownerMid } } : {}) }, preview: `在《${clip(x.title, 30)}》下评论：${clip(text, 60)}`, target: { oid: String(v.aid), type: 1, root: '0', parent: '0', bvid: x.bvid, title: x.title, url: `https://www.bilibili.com/video/${x.bvid}`, to: c.mention ? name : '' }, audience: videoAudience(cfg, v.owner?.mid) }, opt);
         rec.comments.push({ bvid: x.bvid, title: x.title, text, mention: c.mention, status: res.status, result: clip(res.text, 120), ...(res.draft ? { draftId: res.draft.id } : {}) });
       } catch (e) { rec.comments.push({ bvid: x.bvid, title: x.title, text: c.text, mention: c.mention, status: 'failed', result: clip(e?.message ?? e, 120) }); }
     }
@@ -235,7 +245,7 @@ export async function autoSurfOnce({ cfg = loadConfig(), ask, log = () => {}, no
         const v = await viewOf(x);
         const rel = await client.archiveRelation?.(v.aid).catch(() => null);
         if (rel?.like) { rec.likes.push({ bvid: x.bvid, title: x.title, status: 'refused', result: '已经赞过了' }); continue; }
-        const res = await d.request({ kind: 'like', payload: { aid: v.aid }, preview: `点赞《${clip(x.title, 40)}》`, target: target(x, v), audience: videoAudience(cfg, v.owner?.mid) }, opt);
+        const res = await paced(d, { kind: 'like', payload: { aid: v.aid }, preview: `点赞《${clip(x.title, 40)}》`, target: target(x, v), audience: videoAudience(cfg, v.owner?.mid) }, opt);
         noteDraft(res);
         rec.likes.push({ bvid: x.bvid, title: x.title, status: res.status, result: clip(res.text, 120) });
       } catch (e) { rec.likes.push({ bvid: x.bvid, title: x.title, status: 'failed', result: clip(e?.message ?? e, 120) }); }
@@ -247,7 +257,7 @@ export async function autoSurfOnce({ cfg = loadConfig(), ask, log = () => {}, no
         const v = await viewOf(x);
         const rel = await client.archiveRelation?.(v.aid).catch(() => null);
         if (rel?.favorite) { rec.favs.push({ bvid: x.bvid, title: x.title, why, status: 'refused', result: '已经收藏过了' }); continue; }
-        const res = await d.request({ kind: 'fav', payload: { aid: v.aid }, preview: `收藏《${clip(x.title, 40)}》${why ? `：${why}` : ''}`, target: target(x, v, { why }), audience: videoAudience(cfg, v.owner?.mid) }, opt);
+        const res = await paced(d, { kind: 'fav', payload: { aid: v.aid }, preview: `收藏《${clip(x.title, 40)}》${why ? `：${why}` : ''}`, target: target(x, v, { why }), audience: videoAudience(cfg, v.owner?.mid) }, opt);
         noteDraft(res);
         rec.favs.push({ bvid: x.bvid, title: x.title, why, status: res.status, result: clip(res.text, 120) });
       } catch (e) { rec.favs.push({ bvid: x.bvid, title: x.title, why, status: 'failed', result: clip(e?.message ?? e, 120) }); }
@@ -258,7 +268,7 @@ export async function autoSurfOnce({ cfg = loadConfig(), ask, log = () => {}, no
         const tidy = tidyEmotes(post.text, cfg).text;
         const text = checkText('post', tidy, { ownerName: name });
         if (text.includes('@')) throw new Error('动态里不 @ 人');
-        const res = await d.request({ kind: 'post', payload: { text }, preview: `动态：${clip(text, 60)}`, target: { auto: true, bvid: x.bvid, title: x.title } }, opt);
+        const res = await paced(d, { kind: 'post', payload: { text }, preview: `动态：${clip(text, 60)}`, target: { auto: true, bvid: x.bvid, title: x.title } }, opt);
         noteDraft(res);
         rec.post = { bvid: x.bvid, title: x.title, text, status: res.status, result: clip(res.text, 120) };
       } catch (e) { rec.post = { bvid: x.bvid, title: x.title, text: post.text, status: 'failed', result: clip(e?.message ?? e, 120) }; }
@@ -275,7 +285,7 @@ export async function autoSurfOnce({ cfg = loadConfig(), ask, log = () => {}, no
         else {
           try {
             const text = checkText('dm', `${rec2.why || '这个你应该会喜欢'}\n《${clip(x.title, 60)}》${url}`, { ownerName: name });
-            rec.recommend.ways.dm = (await d.request({ kind: 'dm', payload: { to: cfg.ownerMid, text }, preview: `私信主人推荐《${clip(x.title, 30)}》`, target: { to: String(cfg.ownerMid), bvid: x.bvid, title: x.title }, audience: 'own' }, opt)).status;
+            rec.recommend.ways.dm = (await paced(d, { kind: 'dm', payload: { to: cfg.ownerMid, text }, preview: `私信主人推荐《${clip(x.title, 30)}》`, target: { to: String(cfg.ownerMid), bvid: x.bvid, title: x.title }, audience: 'own' }, opt)).status;
           } catch (e) { rec.recommend.ways.dm = `failed：${clip(e?.message ?? e, 80)}`; }
         }
       }

@@ -74,7 +74,9 @@ test('同一视频只评论一次、每日额度、两次之间的间隔、全�
   const t0 = Date.now();
   assert.equal((await request(commentReq('1'), { cfg, client, now: t0, ...f })).status, 'sent');
   assert.match((await request(commentReq('1'), { cfg, client, now: t0 + 120_000, ...f })).text, /已经评论过/);
-  assert.match((await request(commentReq('2'), { cfg, client, now: t0 + 1000, ...f })).text, /太近/);
+  const tooSoon = await request(commentReq('2'), { cfg, client, now: t0 + 1000, ...f });
+  assert.match(tooSoon.text, /太近/);
+  assert.ok(tooSoon.wait > 0 && tooSoon.wait <= 60, '自己逛靠 wait 知道要等多久');
   assert.equal((await request(commentReq('2'), { cfg, client, now: t0 + 61_000, ...f })).status, 'sent');
   const like = { kind: 'like', payload: { aid: 5 }, preview: 'x', target: { oid: '5' } };
   assert.equal((await request(like, { cfg, client, now: t0 + 70_000, ...f })).status, 'sent');
