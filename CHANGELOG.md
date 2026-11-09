@@ -3,7 +3,11 @@
 这个文件记录 dsh-bili-eyes（B站伙伴）每个版本的变化，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 还没发布的改动写在最上面标着「（未发布）」的那一节，发版时换成日期，底下的链接改成指向 tag。
 
-## [0.8.3]（未发布）
+## [0.8.3] - 2026-11-09
+
+这一版只有一件事：**安装检查会提醒 dsh-qq 桥接的补丁没打**。只想让她在群里看视频、没碰过门卫的人，原来不知道要「一键适配」，群里的 B站分享卡片她只看到「[卡片消息]」。
+
+升级说明：没有新工具，已经一键适配过的不用重新适配。安装检查里出现桥接提醒的，点「去设置」按它说的做。
 
 ### 新增
 
@@ -200,7 +204,7 @@
 
 - `bili_look` / `bili_look_zoom`：看 B站视频。分镜图（格号烧在图上）+ 每格的时间和台词 + 标题、UP、标签、简介、热评、弹幕热词和最密集的时段；放大看某几秒。只读，只认 B站。
 
-[0.8.3]: https://github.com/QiuYeDx/dsh-bili-eyes/compare/v0.8.2...HEAD
+[0.8.3]: https://github.com/QiuYeDx/dsh-bili-eyes/releases/tag/v0.8.3
 [0.8.2]: https://github.com/QiuYeDx/dsh-bili-eyes/releases/tag/v0.8.2
 [0.8.1]: https://github.com/QiuYeDx/dsh-bili-eyes/releases/tag/v0.8.1
 [0.8.0]: https://github.com/QiuYeDx/dsh-bili-eyes/releases/tag/v0.8.0
